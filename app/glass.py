@@ -100,8 +100,10 @@ class Text(Clear):
     """Подпись, нарисованная прямо на стекле — без прямоугольника вокруг текста."""
 
     def __init__(self, master, text: str, spec=theme.F_LABEL, color: str = theme.TEXT,
-                 wraplength: int | None = None, justify: str = "left"):
+                 wraplength: int | None = None, justify: str = "left", alpha: float | None = None):
         super().__init__(master)
+        self.alpha = alpha      # None — сплошной цвет; 0..1 — текст полупрозрачный поверх фона
+        self._avg = theme.WINDOW
         size, weight = spec
         # как у CTkFont: отрицательный размер = пиксели, умноженные на масштаб экрана
         self._font = tkfont.Font(family=theme.FONT_UI, size=-round(size * scale_of(self)), weight=weight)
@@ -144,11 +146,24 @@ class Text(Clear):
             self._set_text(kw.pop("text"))
         if "text_color" in kw:
             self._color = kw.pop("text_color")
-            self.itemconfigure(self._text_item, fill=self._color)
+            self._apply_color()
         if kw or cnf:
             return super().configure(cnf, **kw)
 
     config = configure
+
+    def _apply_color(self):
+        fill = self._color if self.alpha is None else blend(self._avg, self._color, self.alpha)
+        self.itemconfigure(self._text_item, fill=fill)
+
+    def set_alpha(self, alpha: float):
+        self.alpha = alpha
+        self._apply_color()
+
+    def show(self, pil):
+        super().show(pil)
+        self._avg = _hex(pil.resize((1, 1), Image.BOX).getpixel((0, 0)))
+        self._apply_color()
 
 
 class GlassPanel(Clear):
@@ -295,13 +310,17 @@ def tint(w, avg: str):
     """Подгоняет цвета контрола под стекло под ним."""
     kind = getattr(w, "ng_kind", None)
     w.ng_avg = avg
-    field = blend(avg, "#ffffff", 0.08)   # field #ffffff14
+    # поля ввода — то же матовое стекло, только плотнее: чуть темнее панели и с еле заметной
+    # обводкой, чтобы едва-едва отделялись от фона
+    field = blend(avg, "#000000", 0.16)
+    field_edge = blend(avg, "#ffffff", 0.09)
+    field_hover = blend(avg, "#ffffff", 0.04)
     track = blend(avg, "#ffffff", 0.13)   # track-off #ffffff1f
     hover = blend(avg, "#ffffff", 0.10)   # wash-pill #ffffff1a
     try:
         if kind == "scroll":
             w.ng_scroll.configure(fg_color=field)
-            w.configure(bg_color=avg)
+            w.configure(bg_color=avg, border_width=1, border_color=field_edge)
         elif isinstance(w, ctk.CTkButton):
             if kind == "ghost":
                 sel = getattr(w, "ng_selected", None)
@@ -310,9 +329,9 @@ def tint(w, avg: str):
             else:
                 w.configure(bg_color=avg)
         elif isinstance(w, ctk.CTkOptionMenu):
-            w.configure(bg_color=avg, fg_color=field, button_color=field, button_hover_color=hover)
+            w.configure(bg_color=avg, fg_color=field, button_color=field, button_hover_color=field_hover)
         elif isinstance(w, (ctk.CTkTextbox, ctk.CTkEntry)):
-            w.configure(bg_color=avg, fg_color=field)
+            w.configure(bg_color=avg, fg_color=field, border_color=field_edge)
         elif isinstance(w, (ctk.CTkSlider, ctk.CTkProgressBar, ctk.CTkSwitch)):
             w.configure(bg_color=avg, fg_color=track)
         elif isinstance(w, ctk.CTkFrame):

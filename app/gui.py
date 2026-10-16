@@ -8,10 +8,13 @@ from tkinter import filedialog
 import customtkinter as ctk
 
 from app import audio, cable_install, theme
-from app.glass import Clear, Dropdown, GlassPanel, GlassView, Text
+from app.chrome_ui import Footer, TabStrip, TitleBar
+from app.glass import Clear, Dropdown, GlassPanel, GlassView, Text, scale_of
 from app.paths import DATA_DIR, SETTINGS_PATH
 from app.picker import AccentPicker
+from app.slider import Slider
 from app.tts import PRESETS, VOICES, TTSEngine, download_model
+from app.window import Chrome
 
 APP_NAME = "VoiceImitator"
 HISTORY_SIZE = 30
@@ -109,42 +112,6 @@ class Kit:
         return row, sw
 
 
-class TabStrip(Clear):
-    """Вкладки с чёрточкой-акцентом под открытой (как в заголовке ZapretLauncher)."""
-
-    def __init__(self, master, tabs, on_change, app):
-        super().__init__(master)
-        self.app = app
-        self.on_change = on_change
-        self.active = tabs[0]
-        self.cells = {}
-        for i, name in enumerate(tabs):
-            cell = Clear(self)
-            cell.grid(row=0, column=i, padx=10)
-            txt = Text(cell, name, theme.F_LIST, theme.MUTED)
-            txt.grid(row=0, column=0, pady=(2, 0))
-            txt.configure(cursor="hand2")
-            txt.bind("<Button-1>", lambda _e, n=name: self.select(n))
-            bar = ctk.CTkFrame(cell, height=3, width=18, corner_radius=theme.R_BAR)
-            bar.ng_kind = "bar"
-            bar.grid(row=1, column=0, pady=(3, 0))
-            self.cells[name] = (txt, bar)
-        self.select(tabs[0], fire=False)
-
-    def select(self, name, fire=True):
-        self.active = name
-        for n, (txt, bar) in self.cells.items():
-            on = n == name
-            txt.configure(text_color=theme.TEXT if on else theme.MUTED)
-            bar.ng_bar_color = self.app.accent if on else None
-            bar.configure(fg_color=bar.ng_bar_color or getattr(bar, "ng_avg", theme.GLASS))
-        if fire:
-            self.on_change(name)
-
-    def restyle_accent(self):
-        self.select(self.active, fire=False)
-
-
 # ======================================================================
 # Экран загрузки
 # ======================================================================
@@ -153,6 +120,8 @@ class LoadingView(GlassView):
     def __init__(self, master, app):
         super().__init__(master, app)
         k = Kit(app)
+        self.grid_columnconfigure(0, weight=1)
+        TitleBar(self, app).grid(row=0, column=0, sticky="ew")
         panel = GlassPanel(self)
         panel.place(relx=0.5, rely=0.5, anchor="center")
         k.label(panel, "VoiceImitator", theme.F_STATUS).grid(row=0, column=0, padx=56, pady=(40, 14))
@@ -221,10 +190,9 @@ class MainView(GlassView):
             "Оформление": self._build_look_area(),
         }
 
-        self.status_bar = GlassPanel(self, radius=theme.R_HINT)
-        self.status_bar.grid(row=2, column=0, sticky="ew", padx=PAD, pady=(0, PAD))
-        self.status_line = self.k.label(self.status_bar, "Готово", theme.F_CAPTION, theme.FAINT)
-        self.status_line.grid(row=0, column=0, padx=16, pady=7, sticky="w")
+        # внизу — только строка версии, сообщения проявляются под ней
+        self.footer = Footer(self, app)
+        self.footer.grid(row=2, column=0, sticky="ew", padx=PAD, pady=(0, round(8 * scale_of(self))))
 
         self.refresh_devices()
         self.apply_audio_settings()
@@ -237,14 +205,11 @@ class MainView(GlassView):
     # ---------- заголовок с вкладками ----------
 
     def _build_header(self):
-        bar = GlassPanel(self, radius=theme.R_HINT)
-        bar.grid(row=0, column=0, sticky="ew", padx=PAD, pady=(PAD, GAP))
-        bar.grid_columnconfigure(1, weight=1)
-        self.k.label(bar, "VoiceImitator", theme.F_TITLE).grid(row=0, column=0, sticky="w", padx=18, pady=10)
+        # вместо системного заголовка: вкладки по центру, кнопки окна справа, прямо на фоне
+        bar = TitleBar(self, self.app)
+        bar.grid(row=0, column=0, sticky="ew")
         self.tabs = TabStrip(bar, self.TABS, self.switch_tab, self.app)
-        self.tabs.grid(row=0, column=1)
-        self.k.label(bar, "Night Glass", theme.F_CAPTION, theme.FAINT)\
-            .grid(row=0, column=2, sticky="e", padx=18)
+        self.tabs.place(relx=0.5, rely=0.5, anchor="center")
 
     def _two_columns(self):
         area = Clear(self)
@@ -396,13 +361,11 @@ class MainView(GlassView):
         self.k.label(head, title).grid(row=0, column=0, sticky="w")
         lbl = self.k.label(head, "", theme.F_CAPTION, theme.MUTED)
         lbl.grid(row=0, column=1, sticky="e")
-        sl = ctk.CTkSlider(parent, from_=lo, to=hi, number_of_steps=steps,
-                           progress_color=self.app.accent, button_color=self.app.accent,
-                           button_hover_color=self.app.accent,
-                           command=lambda _v: (self._fmt(lbl, unit, pct, sl.get()),
-                                               (cmd() if cmd else None), self.save()))
+        sl = Slider(parent, from_=lo, to=hi, number_of_steps=steps, progress_color=self.app.accent,
+                    command=lambda _v: (self._fmt(lbl, unit, pct, sl.get()),
+                                        (cmd() if cmd else None), self.save()))
         sl.set(value)
-        sl.grid(row=row + 1, column=0, sticky="ew", padx=14)
+        sl.grid(row=row + 1, column=0, sticky="ew", padx=16)
         self._fmt(lbl, unit, pct, value)
         self.accent_widgets.append(("slider", sl))
         return lbl, sl
@@ -670,7 +633,6 @@ class MainView(GlassView):
                 if kind == "busy":
                     self.speak_btn.configure(text="Озвучиваю…" if value else "Озвучить   Ctrl+Enter",
                                              state="disabled" if value else "normal")
-                    self.flash("Озвучиваю…" if value else "Готово")
                 elif kind == "error":
                     self.flash(f"Ошибка: {value}")
         except queue.Empty:
@@ -678,7 +640,7 @@ class MainView(GlassView):
         self.after(80, self._poll)
 
     def flash(self, text):
-        self.status_line.configure(text=text)
+        self.footer.flash(text)
 
     # ---------- история ----------
 
@@ -732,9 +694,13 @@ class App(ctk.CTk):
         super().__init__()
         ctk.set_appearance_mode("dark")
         self.title(APP_NAME)
-        self.geometry("1000x700")
         self.minsize(900, 640)
         self.configure(fg_color=theme.WINDOW)
+        # без системного заголовка — вкладки и кнопки окна в своей полосе сверху
+        self.chrome = Chrome(self)
+        self.chrome.on_close = self.on_close
+        s = ctk.ScalingTracker.get_window_scaling(self)
+        self.chrome.center(round(1000 * s), round(700 * s))
 
         self.settings = load_settings()
         self.accent = self.settings.get("accent", theme.DEFAULT_ACCENT)
@@ -760,6 +726,7 @@ class App(ctk.CTk):
             self.view.destroy()
         self.view = view
         view.grid(row=0, column=0, sticky="nsew")
+        self.chrome.attach(view, drag=False)  # поля окна — за них меняется размер
 
     def start_loading(self):
         self.show(LoadingView(self, self))
