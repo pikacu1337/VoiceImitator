@@ -19,6 +19,7 @@ jobs:
     runs-on: windows-latest
     env:
       GH_TOKEN: ${{ github.token }}
+      PYTHONUTF8: "1"   # русский вывод скриптов в консоли раннера
     steps:
       - uses: actions/checkout@v4
 
