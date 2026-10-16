@@ -1,0 +1,61 @@
+# Автоматический релиз: на каждый пуш в main берём версию из app/__init__.py.
+# Если релиза vX.Y.Z ещё нет — собираем VoiceImitator.exe на Windows и публикуем его.
+name: Release
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: release
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    env:
+      GH_TOKEN: ${{ github.token }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Версия
+        id: v
+        shell: bash
+        run: |
+          v=$(sed -nE 's/^__version__ *= *"([^"]+)".*/\1/p' app/__init__.py)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+          if gh release view "v$v" > /dev/null 2>&1; then
+            echo "Релиз v$v уже есть — пропускаю"
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - uses: actions/setup-python@v5
+        if: steps.v.outputs.exists == 'false'
+        with:
+          python-version: "3.12"
+
+      - name: Зависимости
+        if: steps.v.outputs.exists == 'false'
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt pyinstaller
+          pip install torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Сборка exe
+        if: steps.v.outputs.exists == 'false'
+        run: python tools/build_exe.py
+
+      - name: Релиз
+        if: steps.v.outputs.exists == 'false'
+        shell: bash
+        run: |
+          gh release create "v${{ steps.v.outputs.version }}" VoiceImitator.exe \
+            --title "VoiceImitator ${{ steps.v.outputs.version }}" \
+            --target "${{ github.sha }}" \
+            --generate-notes
