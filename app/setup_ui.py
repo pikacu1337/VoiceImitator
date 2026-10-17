@@ -313,8 +313,8 @@ class SetupApp(ctk.CTk):
         self._fonts = {}
         self.busy = False
         self.self_delete = False
-        self.chrome = Chrome(self)
-        self.chrome.resizable = False
+        self.chrome = Chrome(self, min_size=(W, H))
+        self.chrome.resizable = False   # мастер — карточка фиксированного размера, как в лаунчере
         self.chrome.on_close = self.on_close
         s = ctk.ScalingTracker.get_window_scaling(self)
         self.chrome.center(round(W * s), round(H * s))

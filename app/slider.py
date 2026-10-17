@@ -21,9 +21,10 @@ def _rgba(color: str, alpha: int = 255):
 
 class Slider(Clear):
     def __init__(self, master, from_=0.0, to=1.0, number_of_steps=None, command=None,
-                 progress_color=theme.DEFAULT_ACCENT, button_color=None, button_hover_color=None, **_):
+                 progress_color=theme.DEFAULT_ACCENT, button_color=None, button_hover_color=None,
+                 width: int = 40, **_):
         self.s = scale_of(master)
-        super().__init__(master, height=round(HEIGHT * self.s), width=40, cursor="hand2")
+        super().__init__(master, height=round(HEIGHT * self.s), width=round(width * self.s), cursor="hand2")
         self.lo, self.hi = float(from_), float(to)
         self.steps = number_of_steps
         self.command = command

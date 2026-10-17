@@ -18,6 +18,7 @@ from app.glass import scale_of
 
 user32 = ctypes.windll.user32
 gdi32 = ctypes.windll.gdi32
+PW_CLIENTONLY = 1
 PW_RENDERFULLCONTENT = 2
 
 
@@ -29,10 +30,10 @@ class _BIH(ctypes.Structure):
 
 
 def capture(hwnd: int) -> Image.Image | None:
-    """Снимок окна целиком (с дочерними окнами), даже если его что-то перекрывает."""
+    """Снимок содержимого окна (без невидимой системной рамки), даже если его что-то перекрывает."""
     r = wintypes.RECT()
-    user32.GetWindowRect(hwnd, ctypes.byref(r))
-    w, h = r.right - r.left, r.bottom - r.top
+    user32.GetClientRect(hwnd, ctypes.byref(r))
+    w, h = r.right, r.bottom
     if w <= 0 or h <= 0:
         return None
     hdc = user32.GetWindowDC(hwnd)
@@ -40,7 +41,7 @@ def capture(hwnd: int) -> Image.Image | None:
     bmp = gdi32.CreateCompatibleBitmap(hdc, w, h)
     old = gdi32.SelectObject(mdc, bmp)
     try:
-        if not user32.PrintWindow(hwnd, mdc, PW_RENDERFULLCONTENT):
+        if not user32.PrintWindow(hwnd, mdc, PW_RENDERFULLCONTENT | PW_CLIENTONLY):
             return None
         bi = _BIH(ctypes.sizeof(_BIH), w, -h, 1, 32, 0, 0, 0, 0, 0, 0)
         buf = ctypes.create_string_buffer(w * h * 4)
@@ -71,7 +72,10 @@ class Freeze:
         if snap is None or base is None:
             return
         if base.size != snap.size:
-            base = base.resize(snap.size)
+            # окно уже чуть подросло, а интерфейс на снимке ещё в старой раскладке —
+            # берём из снимка ровно старую область (у верхнего левого угла)
+            w, h = min(snap.width, base.width), min(snap.height, base.height)
+            snap, base = snap.crop((0, 0, w, h)), base.crop((0, 0, w, h))
         # Интерфейс — всё, чем снимок отличается от голого фона: панели, текст, кнопки.
         diff = np.abs(np.asarray(snap, np.int16) - np.asarray(base, np.int16)).max(axis=2)
         keep = diff > 6
