@@ -232,8 +232,10 @@ class MainView(GlassView):
 
     def _build_speak_area(self):
         area = Clear(self)
-        area.grid_columnconfigure(0, weight=3)
-        area.grid_columnconfigure(1, weight=2)
+        # uniform — ширина делится строго 3:2 и не зависит от содержимого: иначе смена текста
+        # кнопки («Озвучить» → «Озвучиваю…») сдвигала обе панели
+        area.grid_columnconfigure(0, weight=3, uniform="speak")
+        area.grid_columnconfigure(1, weight=2, uniform="speak")
 
         p = GlassPanel(area)
         p.grid(row=0, column=0, sticky="new", padx=(0, GAP // 2))
@@ -699,6 +701,7 @@ class App(ctk.CTk):
         # без системного заголовка — вкладки и кнопки окна в своей полосе сверху
         self.chrome = Chrome(self)
         self.chrome.on_close = self.on_close
+        self.chrome.on_resize_end = lambda: self.view is not None and self.view.recompose_later(30)
         s = ctk.ScalingTracker.get_window_scaling(self)
         self.chrome.center(round(1000 * s), round(700 * s))
 

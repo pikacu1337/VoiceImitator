@@ -24,7 +24,7 @@ def main() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-    work =Path(tempfile.mkdtemp(prefix="voiceimitator_build_"))  # build/ и .spec — не в папке проекта
+    work = Path(tempfile.mkdtemp(prefix="voiceimitator_build_"))  # build/ и .spec — не в папке проекта
     args = [
         sys.executable, "-m", "PyInstaller",
         "--noconfirm", "--clean",
