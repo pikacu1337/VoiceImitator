@@ -63,14 +63,32 @@ def _sky(w: int, h: int, scale: float) -> Image.Image:
     return pic
 
 
-def _cover(img: Image.Image, w: int, h: int) -> Image.Image:
-    """Заполнение с сохранением пропорций (как background-size: cover), обрезка по центру."""
+def _cover(img: Image.Image, w: int, h: int, fast: bool = False) -> Image.Image:
+    """Заполнение с сохранением пропорций (как background-size: cover), обрезка по центру.
+    fast — кадр растягивания окна: из уменьшенной копии и попроще, но с той же обрезкой."""
     iw, ih = img.size
     s = max(w / iw, h / ih)
-    nw, nh = max(1, round(iw * s)), max(1, round(ih * s))
-    img = img.resize((nw, nh), Image.LANCZOS)
-    left, top = (nw - w) // 2, (nh - h) // 2
-    return img.crop((left, top, left + w, top + h))
+    # обрезка считается в долях исходника — одна и та же у быстрого и полного кадра
+    cw, ch = w / s, h / s
+    box = (max(0.0, (iw - cw) / 2), max(0.0, (ih - ch) / 2), min(iw, (iw + cw) / 2), min(ih, (ih + ch) / 2))
+    if fast:
+        small = _small(img)
+        k = small.width / iw
+        return small.resize((w, h), Image.BILINEAR, box=tuple(v * k for v in box))
+    return img.resize((w, h), Image.LANCZOS, box=box)
+
+
+_small_cache: dict = {}
+
+
+def _small(img: Image.Image) -> Image.Image:
+    """Копия исходника не больше 1000 px — для быстрых кадров."""
+    key = id(img)
+    if key not in _small_cache:
+        _small_cache.clear()
+        f = max(1, max(img.size) // 1000)
+        _small_cache[key] = (img, img.reduce(f) if f > 1 else img)   # img держим, чтобы id не повторился
+    return _small_cache[key][1]
 
 
 _src_cache: dict = {}
@@ -88,7 +106,7 @@ def _load(path: Path) -> Image.Image | None:
 
 
 def render(w: int, h: int, mode: str = "picture", custom: str = "", brightness: int = 50,
-           blur: int = 0, scale: float = 1.0) -> Image.Image:
+           blur: int = 0, scale: float = 1.0, fast: bool = False) -> Image.Image:
     w, h = max(2, int(w)), max(2, int(h))
     if mode == "sky":
         pic = _sky(w, h, scale)
@@ -98,7 +116,7 @@ def render(w: int, h: int, mode: str = "picture", custom: str = "", brightness: 
             src = _load(backdrop_path())
         if src is None:
             return _sky(w, h, scale)
-        pic = _cover(src, w, h)
+        pic = _cover(src, w, h, fast)
         pic = Image.fromarray((np.asarray(pic, dtype=np.float32) * (brightness / 100.0)).astype(np.uint8))
     if blur > 0:
         pic = pic.filter(ImageFilter.GaussianBlur(blur / 100.0 * BACKDROP_BLUR_MAX * scale))
