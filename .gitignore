@@ -6,6 +6,7 @@ dist/
 *.spec
 # собранная программа лежит в корне, но в git не идёт — она публикуется в Releases
 VoiceImitator.exe
+VoiceImitatorSetup.exe
 
 # worktree-папки Claude Code
 .claude/

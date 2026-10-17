@@ -2,6 +2,7 @@ import json
 import queue
 import shutil
 import threading
+import time
 from pathlib import Path
 from tkinter import filedialog
 
@@ -9,6 +10,7 @@ import customtkinter as ctk
 
 from app import audio, cable_install, theme
 from app.chrome_ui import Footer, TabStrip, TitleBar
+from app.freeze import Freeze
 from app.glass import Clear, Dropdown, GlassPanel, GlassView, Text, scale_of
 from app.paths import DATA_DIR, SETTINGS_PATH
 from app.picker import AccentPicker
@@ -173,7 +175,7 @@ class MainView(GlassView):
         self.k = Kit(app)
         self.s = app.settings
         self.engine: TTSEngine = app.engine
-        self.router = audio.AudioRouter()
+        self.router = audio.AudioRouter(on_error=self._audio_error)
         self.jobs: queue.Queue = queue.Queue()
         self.results: queue.Queue = queue.Queue()
         self.out_devices = []
@@ -485,6 +487,7 @@ class MainView(GlassView):
     # ---------- устройства ----------
 
     def refresh_devices(self):
+        self.audio_ok = audio.windows_audio_ok()
         self.out_devices = audio.list_devices("output")
         self.in_devices = audio.list_devices("input")
         out_names = [d.name for d in self.out_devices] or [""]
@@ -508,8 +511,11 @@ class MainView(GlassView):
 
     def _update_cable_warning(self, name):
         found = bool(name and audio.is_cable(name))
-        missing = not audio.find_cable(self.out_devices)
-        if found:
+        missing = not audio.find_cable(self.out_devices) and self.audio_ok
+        if not self.audio_ok:
+            text = ("Служба звука Windows не отвечает — устройства не видны. Перезагрузите компьютер "
+                    "или запустите службу «Windows Audio», затем нажмите «Обновить устройства»")
+        elif found:
             text = "Кабель найден. В Discord выберите CABLE Output как устройство ввода"
         elif missing:
             text = ("Виртуальный кабель не найден. Нажмите «Установить кабель» — откроется окно "
@@ -537,11 +543,16 @@ class MainView(GlassView):
         self.router.mic_volume = self.s["mic_volume"]
 
     def rescan(self):
-        self.router.close()
-        audio.rescan_devices()
+        # всё — в потоке устройств, по очереди: закрыть, перечитать, затем обновить окно
+        self.router.close_streams()
+        self.router.call(audio.rescan_devices)
+        self.router.call(lambda: self.after(0, self._after_rescan))
+
+    def _after_rescan(self):
         self.refresh_devices()
         self.apply_audio_settings()
-        self.flash("Список устройств обновлён")
+        self.flash("Список устройств обновлён" if self.audio_ok else
+                   "Служба звука Windows не отвечает — перезагрузите компьютер")
 
     def on_cable_change(self, _v):
         self._update_cable_warning(self.cable.get())
@@ -582,18 +593,30 @@ class MainView(GlassView):
                 self.after(0, lambda: self.cable_btn.configure(state="normal", text="Установить кабель"))
                 return
             self.after(0, lambda: self.cable_btn.configure(text="Жду установки…"))
-            ok = cable_install.wait_for_cable()
-            self.after(0, lambda: self._after_install(ok))
+            self.after(0, lambda: self._wait_cable(time.monotonic() + 120))
 
         threading.Thread(target=work, daemon=True).start()
+
+    def _wait_cable(self, deadline):
+        """Каждые 2 с перечитывать устройства (в потоке звука), пока не появится кабель."""
+        def check():
+            if audio.find_cable(audio.list_devices("output")):
+                self._after_install(True)
+            elif time.monotonic() < deadline:
+                self.after(2000, lambda: self._wait_cable(deadline))
+            else:
+                self._after_install(False)
+        self.router.close_streams()
+        self.router.call(audio.rescan_devices)
+        self.router.call(lambda: self.after(0, check))
 
     def _after_install(self, ok):
         if not ok:
             self.cable_btn.configure(state="normal", text="Установить кабель")
             self.cable_warn.configure(text="Пока не вижу кабель. Если ставили — иногда нужна перезагрузка, "
                                            "после неё нажмите «Обновить устройства»")
+            self.apply_audio_settings()
             return
-        self.router.close()
         self.refresh_devices()
         cable = audio.find_cable(self.out_devices)
         if cable:
@@ -604,12 +627,15 @@ class MainView(GlassView):
 
     # ---------- озвучка ----------
 
-    def speak(self, text=None):
+    def speak(self, text=None, from_history=False):
         if text is None:
             text = self.text.get("1.0", "end").strip()
         if not text:
             return
-        self.add_history(text)
+        # Фраза, нажатая в истории, просто проигрывается — порядок истории не меняется.
+        # Наверх поднимается только текст, заново введённый в поле.
+        if not from_history:
+            self.add_history(text)
         self.jobs.put(text)
 
     def stop(self):
@@ -644,6 +670,13 @@ class MainView(GlassView):
     def flash(self, text):
         self.footer.flash(text)
 
+    def _audio_error(self, msg):
+        """Из потока звука: показать сообщение внизу окна (в потоке окна)."""
+        try:
+            self.after(0, lambda: self.winfo_exists() and self.flash(msg))
+        except RuntimeError:
+            pass   # окно уже закрыто
+
     # ---------- история ----------
 
     def add_history(self, text):
@@ -656,14 +689,24 @@ class MainView(GlassView):
         self.save()
 
     def render_history(self):
-        for w in self.history_box.winfo_children():
-            w.destroy()
-        for item in self.s["history"]:
+        # Строки переиспользуются: меняются только надписи. Раньше список пересоздавался
+        # целиком и на мгновение становился пустым.
+        rows = getattr(self, "_history_rows", [])
+        items = self.s["history"]
+        while len(rows) < len(items):
+            b = ctk.CTkButton(self.history_box, text="", anchor="w", height=28,
+                              corner_radius=theme.R_ROW, fg_color="transparent", hover_color=theme.WASH,
+                              text_color=theme.MUTED, font=self.app.font(theme.F_LIST))
+            b.pack(fill="x", pady=1)
+            rows.append(b)
+        while len(rows) > len(items):
+            rows.pop().destroy()
+        for b, item in zip(rows, items):
             preview = item if len(item) <= 52 else item[:51] + "…"
-            ctk.CTkButton(self.history_box, text=preview, anchor="w", height=28,
-                          corner_radius=theme.R_ROW, fg_color="transparent", hover_color=theme.WASH,
-                          text_color=theme.MUTED, font=self.app.font(theme.F_LIST),
-                          command=lambda t=item: self.speak(t)).pack(fill="x", pady=1)
+            if b.cget("text") != preview:
+                b.configure(text=preview)
+            b.configure(command=lambda t=item: self.speak(t, from_history=True))
+        self._history_rows = rows
 
     # ---------- сохранение ----------
 
@@ -701,7 +744,11 @@ class App(ctk.CTk):
         # без системного заголовка — вкладки и кнопки окна в своей полосе сверху
         self.chrome = Chrome(self)
         self.chrome.on_close = self.on_close
-        self.chrome.on_resize_end = lambda: self.view is not None and self.view.recompose_later(30)
+        # пока тянут край или разворачивают окно — поверх стоп-кадр, перекладка под ним
+        self.freeze = Freeze(self)
+        self.chrome.on_resize_start = self.freeze.start
+        self.chrome.on_resize_frame = self.freeze.frame
+        self.chrome.on_resize_end = self.freeze.end
         s = ctk.ScalingTracker.get_window_scaling(self)
         self.chrome.center(round(1000 * s), round(700 * s))
 

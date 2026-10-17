@@ -3,7 +3,9 @@
 и своим голосом, не переключая микрофон в Discord."""
 
 import collections
+import queue
 import threading
+import time
 from dataclasses import dataclass
 
 import numpy as np
@@ -36,6 +38,13 @@ def rescan_devices() -> None:
     Все открытые потоки при этом умирают — перед вызовом закрой AudioRouter."""
     sd._terminate()
     sd._initialize()
+
+
+def windows_audio_ok() -> bool:
+    """Служба «Windows Audio» отвечает: у WASAPI есть устройства. Когда служба остановлена,
+    PortAudio видит только WDM-KS, а открытие устройств через WASAPI зависает."""
+    api = _wasapi_index()
+    return api is not None and len(sd.query_hostapis(api)["devices"]) > 0
 
 
 def list_devices(kind: str) -> list[Device]:
@@ -131,38 +140,110 @@ class _Sink:
         self.stream.close()
 
 
+def _human_error(name: str, e: Exception) -> str:
+    """Ошибка PortAudio — одной понятной фразой: что случилось и что делать."""
+    text = str(e)
+    if "Invalid device" in text or "-9996" in text:
+        return f"{name}: устройство недоступно — выберите другое в «Настройках» и нажмите «Обновить устройства»"
+    if "Unanticipated host error" in text or "-9999" in text:
+        return f"{name}: устройство занято другой программой или отключено"
+    if "Invalid sample rate" in text or "-9997" in text:
+        return f"{name}: устройство не поддерживает нужную частоту — выберите другое"
+    return f"{name}: не удалось открыть устройство ({text})"
+
+
 class AudioRouter:
-    def __init__(self):
+    """Все открытия и закрытия устройств идут в отдельном потоке по очереди: если драйвер
+    или служба звука Windows не отвечает, висит этот поток, а не окно. Если операция
+    тянется дольше SLOW_SECONDS, вызывается on_error с понятным текстом."""
+
+    SLOW_SECONDS = 4.0
+
+    def __init__(self, on_error=None):
         self.cable: _Sink | None = None
         self.monitor: _Sink | None = None
         self.mic_stream: sd.InputStream | None = None
         self.mic_rate = SAMPLE_RATE
         self.mic_volume = 1.0
+        self.volume = 1.0
+        self.on_error = on_error or (lambda msg: None)
         self._mic_buf: collections.deque[np.ndarray] = collections.deque()
         self._mic_len = 0
         self._mic_lock = threading.Lock()
+        self._tasks: queue.Queue = queue.Queue()
+        self._busy_since = None
+        self._warned = False
+        self._thread = threading.Thread(target=self._loop, name="audio", daemon=True)
+        self._thread.start()
+        threading.Thread(target=self._watchdog, name="audio-watchdog", daemon=True).start()
+
+    # --- поток устройств ---
+
+    def _loop(self):
+        while True:
+            task = self._tasks.get()
+            if task is None:
+                return
+            name, fn = task
+            self._busy_since = time.monotonic()
+            try:
+                fn()
+            except Exception as e:
+                self.on_error(_human_error(name, e))
+            finally:
+                self._busy_since = None
+                self._warned = False
+
+    def _watchdog(self):
+        while self._thread.is_alive():
+            time.sleep(0.5)
+            since = self._busy_since
+            if since and not self._warned and time.monotonic() - since > self.SLOW_SECONDS:
+                self._warned = True
+                self.on_error("Звуковое устройство не отвечает. Проверьте, что служба «Windows Audio» "
+                              "запущена, или перезагрузите компьютер")
+
+    def _submit(self, name, fn):
+        self._tasks.put((name, fn))
+
+    def call(self, fn):
+        """Выполнить fn в потоке устройств после уже поставленных задач."""
+        self._submit("Звук", fn)
 
     # --- настройка выходов ---
 
     def set_cable(self, device: Device | None) -> None:
-        if self.cable:
-            self.cable.close()
-            self.cable = None
-        if device:
-            self.cable = _Sink(device, self, with_mic=True)
+        self._submit("Кабель", lambda: self._set_cable(device))
 
     def set_monitor(self, device: Device | None) -> None:
-        if self.monitor:
-            self.monitor.close()
-            self.monitor = None
-        if device:
-            self.monitor = _Sink(device, self, with_mic=False)
+        self._submit("Наушники", lambda: self._set_monitor(device))
 
     def set_mic(self, device: Device | None) -> None:
-        if self.mic_stream:
-            self.mic_stream.stop()
-            self.mic_stream.close()
-            self.mic_stream = None
+        self._submit("Микрофон", lambda: self._set_mic(device))
+
+    def _set_cable(self, device):
+        old, self.cable = self.cable, None
+        if old:
+            old.close()
+        if device:
+            sink = _Sink(device, self, with_mic=True)
+            sink.volume = self.volume
+            self.cable = sink
+
+    def _set_monitor(self, device):
+        old, self.monitor = self.monitor, None
+        if old:
+            old.close()
+        if device:
+            sink = _Sink(device, self, with_mic=False)
+            sink.volume = self.volume
+            self.monitor = sink
+
+    def _set_mic(self, device):
+        old, self.mic_stream = self.mic_stream, None
+        if old:
+            old.stop()
+            old.close()
         with self._mic_lock:
             self._mic_buf.clear()
             self._mic_len = 0
@@ -172,14 +253,16 @@ class AudioRouter:
                       callback=self._mic_callback, latency="low")
         try:
             self.mic_rate = SAMPLE_RATE
-            self.mic_stream = sd.InputStream(samplerate=self.mic_rate,
-                                             extra_settings=sd.WasapiSettings(auto_convert=True), **kwargs)
+            stream = sd.InputStream(samplerate=self.mic_rate,
+                                    extra_settings=sd.WasapiSettings(auto_convert=True), **kwargs)
         except Exception:
             self.mic_rate = device.default_rate
-            self.mic_stream = sd.InputStream(samplerate=self.mic_rate, **kwargs)
-        self.mic_stream.start()
+            stream = sd.InputStream(samplerate=self.mic_rate, **kwargs)
+        stream.start()
+        self.mic_stream = stream
 
     def set_volume(self, value: float) -> None:
+        self.volume = value
         for sink in (self.cable, self.monitor):
             if sink:
                 sink.volume = value
@@ -231,7 +314,14 @@ class AudioRouter:
     def playing(self) -> bool:
         return any(s and s.playing for s in (self.cable, self.monitor))
 
-    def close(self) -> None:
+    def close_streams(self) -> None:
+        """Закрыть все устройства (в очереди, не дожидаясь)."""
         self.set_cable(None)
         self.set_monitor(None)
         self.set_mic(None)
+
+    def close(self, timeout: float = 1.5) -> None:
+        """При выходе: закрыть устройства и остановить поток, но ждать не дольше timeout."""
+        self.close_streams()
+        self._tasks.put(None)
+        self._thread.join(timeout)

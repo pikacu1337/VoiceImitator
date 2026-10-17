@@ -48,7 +48,12 @@ class Chrome:
         self._drag = None
         self._resize = None
         self._cursor = ""
-        self.resizing = False   # пока тянут край — стекло считается быстрее и грубее
+        self.resizable = True   # у мастера установки окно фиксированного размера
+        self.resizing = False   # пока тянут край, поверх окна стоп-кадр (см. app/freeze.py)
+        self._pending = None    # последний размер от мыши — применяется не чаще, чем успевает экран
+        self._apply_job = None
+        self.on_resize_start = lambda: None
+        self.on_resize_frame = lambda: None
         self.on_resize_end = lambda: None
         self.on_state = lambda maximized: None
         self.on_close = root.destroy
@@ -103,6 +108,7 @@ class Chrome:
         user32.ShowWindow(self.hwnd, SW_MINIMIZE)
 
     def toggle_maximize(self):
+        self.on_resize_start()     # стоп-кадр закрывает перекладку интерфейса
         if self.maximized:
             tk.Wm.wm_geometry(self.root, self._normal)
             self.maximized = False
@@ -112,6 +118,9 @@ class Chrome:
             tk.Wm.wm_geometry(self.root, f"{right - left}x{bottom - top}+{left}+{top}")
             self.maximized = True
         self.on_state(self.maximized)
+        self.root.update_idletasks()
+        self.on_resize_frame()
+        self.root.after(30, self.on_resize_end)
 
     def close(self):
         self.on_close()
@@ -128,7 +137,7 @@ class Chrome:
             widget.bind("<Double-Button-1>", lambda e: self._dbl(e, drag_height), add="+")
 
     def _edge(self, e):
-        if self.maximized:
+        if self.maximized or not self.resizable:
             return ""
         x, y = e.x_root - self.root.winfo_rootx(), e.y_root - self.root.winfo_rooty()
         w, h = self.root.winfo_width(), self.root.winfo_height()
@@ -158,6 +167,7 @@ class Chrome:
             self._resize = (side, e.x_root, e.y_root, self.root.winfo_rootx(), self.root.winfo_rooty(),
                             self.root.winfo_width(), self.root.winfo_height())
             self.resizing = True
+            self.on_resize_start()
         elif drag and self._in_drag_zone(e, drag_height):
             if self.maximized:  # тянем развёрнутое окно — сначала вернуть обычный размер под курсор
                 nw = int(self._normal.split("x")[0])
@@ -184,14 +194,26 @@ class Chrome:
             if "n" in side:
                 nh = max(mh, h - ddy)
                 y, h = y + (h - nh), nh
-            tk.Wm.wm_geometry(self.root, f"{w}x{h}+{x}+{y}")
+            self._pending = f"{w}x{h}+{x}+{y}"
+            if self._apply_job is None:
+                self._apply_job = self.root.after_idle(self._apply_size)
+
+    def _apply_size(self):
+        self._apply_job = None
+        if self._pending:
+            tk.Wm.wm_geometry(self.root, self._pending)
+            self._pending = None
+            self.on_resize_frame()
 
     def _release(self, _e):
         self._drag = None
         self._resize = None
         if self.resizing:
+            if self._apply_job:
+                self.root.after_cancel(self._apply_job)
+            self._apply_size()
             self.resizing = False
-            self.on_resize_end()   # после растягивания — стекло в полном качестве
+            self.on_resize_end()   # интерфейс собирается начисто, стоп-кадр убирается
 
     def _dbl(self, e, drag_height):
         if not self._edge(e) and self._in_drag_zone(e, drag_height):

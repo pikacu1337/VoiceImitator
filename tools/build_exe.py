@@ -1,10 +1,14 @@
-"""Сборка программы в один .exe через PyInstaller.
+"""Сборка через PyInstaller: программа и установщик, оба — одним файлом в корне проекта.
 
     .venv\\Scripts\\python -m pip install pyinstaller
-    .venv\\Scripts\\python tools\\build_exe.py
+    .venv\\Scripts\\python tools\\build_exe.py            # оба
+    .venv\\Scripts\\python tools\\build_exe.py app        # только VoiceImitator.exe
+    .venv\\Scripts\\python tools\\build_exe.py setup      # только VoiceImitatorSetup.exe
 
-Готовый VoiceImitator.exe появится прямо в корне проекта.
-Голосовая модель (~40 МБ) НЕ вшивается — при первом запуске программа скачает её сама.
+VoiceImitator.exe (~180 МБ, внутри PyTorch) — сама программа; голосовая модель (~40 МБ)
+не вшивается, программа скачает её при первом запуске.
+VoiceImitatorSetup.exe (небольшой) — мастер установки: скачивает последнюю версию
+программы с GitHub, ставит её, создаёт ярлыки и запись в «Приложениях».
 """
 
 import os
@@ -15,6 +19,51 @@ import tempfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
+ASSETS = ROOT / "app" / "assets"
+
+TARGETS = {
+    "app": dict(
+        name="VoiceImitator",
+        entry=ROOT / "app" / "__main__.py",
+        extra=["--collect-data", "num2words", "--collect-submodules", "num2words",
+               "--hidden-import", "app.gui",
+               # оригинальный пакет VB-CABLE и картинка фона — как app/assets (без изменений)
+               "--add-data", f"{ASSETS}{os.pathsep}app/assets"],
+    ),
+    "setup": dict(
+        name="VoiceImitatorSetup",
+        entry=ROOT / "app" / "setup_main.py",
+        # установщику не нужны ни голос, ни звук — без них он в разы меньше
+        extra=["--add-data", f"{ASSETS / 'Images'}{os.pathsep}app/assets/Images",
+               *[x for m in ("torch", "pedalboard", "sounddevice", "num2words", "_sounddevice_data",
+                             "app.gui", "app.tts", "app.audio", "app.cable_install")
+                 for x in ("--exclude-module", m)]],
+    ),
+}
+
+
+def build(target: str) -> None:
+    t = TARGETS[target]
+    work = Path(tempfile.mkdtemp(prefix="voiceimitator_build_"))  # build/ и .spec — не в папке проекта
+    args = [
+        sys.executable, "-m", "PyInstaller",
+        "--noconfirm", "--clean",
+        "--workpath", str(work / "build"),
+        "--specpath", str(work),
+        "--distpath", str(ROOT),  # exe — прямо в корне проекта
+        "--name", t["name"],
+        "--windowed",
+        "--onefile",
+        "--collect-all", "customtkinter",
+        *t["extra"],
+        str(t["entry"]),
+    ]
+    print("PyInstaller:", " ".join(args))
+    try:
+        subprocess.check_call(args, cwd=ROOT)
+    finally:
+        shutil.rmtree(work, ignore_errors=True)
+    print(f"\nГотово: {t['name']}.exe")
 
 
 def main() -> None:
@@ -24,30 +73,9 @@ def main() -> None:
             stream.reconfigure(encoding="utf-8", errors="replace")
         except Exception:
             pass
-    work = Path(tempfile.mkdtemp(prefix="voiceimitator_build_"))  # build/ и .spec — не в папке проекта
-    args = [
-        sys.executable, "-m", "PyInstaller",
-        "--noconfirm", "--clean",
-        "--workpath", str(work / "build"),
-        "--specpath", str(work),
-        "--distpath", str(ROOT),  # exe — прямо в корне проекта
-        "--name", "VoiceImitator",
-        "--windowed",
-        "--onefile",
-        "--collect-all", "customtkinter",
-        "--collect-data", "num2words",
-        "--collect-submodules", "num2words",
-        "--hidden-import", "app.gui",
-        # Оригинальный пакет VB-CABLE кладётся рядом как app/assets (без изменений)
-        "--add-data", f"{ROOT / 'app' / 'assets'}{os.pathsep}app/assets",
-        str(ROOT / "app" / "__main__.py"),
-    ]
-    print("PyInstaller:", " ".join(args))
-    try:
-        subprocess.check_call(args, cwd=ROOT)
-    finally:
-        shutil.rmtree(work, ignore_errors=True)
-    print("\nГотово: VoiceImitator.exe")
+    targets = sys.argv[1:] or list(TARGETS)
+    for target in targets:
+        build(target)
 
 
 if __name__ == "__main__":

@@ -89,16 +89,24 @@ class TitleButton(Clear):
 class TitleBar(Clear):
     """Полоса заголовка: тянет окно, двойной щелчок разворачивает; справа кнопки окна."""
 
-    def __init__(self, master, app):
+    def __init__(self, master, app, maximizable: bool = True, caption: str | None = None):
         s = scale_of(master)
         super().__init__(master, height=round(TITLE_H * s))
         btns = Clear(self)
         btns.place(relx=1.0, x=-round(12 * s), rely=0.5, anchor="e")
         TitleButton(btns, "", app.chrome.minimize).grid(row=0, column=0)
-        self.max_btn = TitleButton(btns, "", app.chrome.toggle_maximize)
-        self.max_btn.grid(row=0, column=1)
+        if maximizable:
+            self.max_btn = TitleButton(btns, "", app.chrome.toggle_maximize)
+            self.max_btn.grid(row=0, column=1)
+            app.chrome.on_state = lambda maximized: self.max_btn.set_glyph("" if maximized else "")
         TitleButton(btns, "", app.on_close).grid(row=0, column=2)
-        app.chrome.on_state = lambda maximized: self.max_btn.set_glyph("" if maximized else "")
+        if caption:
+            # как wordmark мастера ZapretLauncher: название 600 цвета text, пояснение faint
+            mark = Clear(self)
+            mark.place(x=round(20 * s), rely=0.5, anchor="w")
+            Text(mark, "VoiceImitator", (15, "bold"), theme.TEXT).grid(row=0, column=0)
+            Text(mark, caption, (15, "normal"), theme.FAINT).grid(row=0, column=1)
+            app.chrome.attach(mark, drag=True)
         app.chrome.attach(self, drag=True)
 
 
