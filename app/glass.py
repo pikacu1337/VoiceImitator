@@ -314,6 +314,10 @@ class GlassView(tk.Canvas):
             self.itemconfigure(self._bgrect, fill=_hex(img.resize((1, 1), Image.BOX).getpixel((0, 0))))
             self.tag_lower(self._item)
             self.tag_lower(self._bgrect)
+            chrome = getattr(self.app, "chrome", None)
+            if chrome is not None and getattr(self.app, "view", None) is self:
+                # верхний край системной рамки — цветом верха фона, чтобы с ним сливался
+                chrome.set_top_color(_hex(img.crop((0, 0, W, 3)).resize((1, 1), Image.BOX).getpixel((0, 0))))
 
         def crop(x0, y0, x1, y1):
             return img.crop((max(0, x0), max(0, y0), min(W, x1), min(H, y1)))

@@ -16,12 +16,15 @@ from app.paths import DATA_DIR, SETTINGS_PATH
 from app.picker import AccentPicker
 from app.slider import Slider
 from app.tts import PRESETS, VOICES, TTSEngine, download_model
-from app.window import Chrome
+from app.window import DEFAULT_SIZE, MIN_SIZE, Chrome
 
 APP_NAME = "VoiceImitator"
 HISTORY_SIZE = 30
 PAD = 24   # space-8: поля окна
 GAP = 14   # space-4: промежуток между панелями
+MAX_W = 1320          # как MaxWidth у настроек лаунчера: на большом окне — по центру, не шире
+SLIDER_W = 170        # ползунок постоянной ширины, как в лаунчере
+SLIDER_VALUE_W = 48   # колонка значения справа от ползунка
 COL_TEXT = 380  # ширина переноса подписей в панели половинной ширины
 
 DEFAULT_SETTINGS = {
@@ -43,6 +46,7 @@ DEFAULT_SETTINGS = {
     "mic": "",
     "mic_volume": 1.0,
     "history": [],
+    "window": None,           # [ширина, высота] обычного окна — открываться таким же
 }
 
 
@@ -200,6 +204,7 @@ class MainView(GlassView):
         self.apply_audio_settings()
         self.apply_accent()
         self.switch_tab("Озвучка")
+        self.bind("<Configure>", self._fit_width, add="+")
 
         threading.Thread(target=self._worker, daemon=True).start()
         self.after(60, self._poll)
@@ -359,17 +364,21 @@ class MainView(GlassView):
     # ---------- общие ----------
 
     def _slider(self, parent, row, title, lo, hi, value, unit, pct=False, cmd=None, steps=None, accent=True):
-        head = Clear(parent)
-        head.grid(row=row, column=0, sticky="ew", padx=20, pady=(12, 2))
-        head.grid_columnconfigure(0, weight=1)
-        self.k.label(head, title).grid(row=0, column=0, sticky="w")
-        lbl = self.k.label(head, "", theme.F_CAPTION, theme.MUTED)
-        lbl.grid(row=0, column=1, sticky="e")
-        sl = Slider(parent, from_=lo, to=hi, number_of_steps=steps, progress_color=self.app.accent,
-                    command=lambda _v: (self._fmt(lbl, unit, pct, sl.get()),
-                                        (cmd() if cmd else None), self.save()))
+        """Строка, как в настройках ZapretLauncher: название слева, справа ползунок постоянной
+        ширины 170 и значение (по правому краю) — при растягивании окна ползунок не растёт."""
+        s = scale_of(self)
+        line = Clear(parent)
+        line.grid(row=row, column=0, sticky="ew", padx=20, pady=(10, 0))
+        line.grid_columnconfigure(0, weight=1)
+        line.grid_columnconfigure(2, minsize=round(SLIDER_VALUE_W * s))
+        self.k.label(line, title).grid(row=0, column=0, sticky="w")
+        lbl = self.k.label(line, "", (12.5, "normal"), theme.MUTED)
+        lbl.grid(row=0, column=2, sticky="e")
+        sl = Slider(line, from_=lo, to=hi, number_of_steps=steps, progress_color=self.app.accent,
+                    width=SLIDER_W, command=lambda _v: (self._fmt(lbl, unit, pct, sl.get()),
+                                                        (cmd() if cmd else None), self.save()))
         sl.set(value)
-        sl.grid(row=row + 1, column=0, sticky="ew", padx=16)
+        sl.grid(row=0, column=1, padx=(round(12 * s), round(8 * s)))
         self._fmt(lbl, unit, pct, value)
         self.accent_widgets.append(("slider", sl))
         return lbl, sl
@@ -400,8 +409,23 @@ class MainView(GlassView):
     def switch_tab(self, name):
         for area in self.areas.values():
             area.grid_remove()
-        self.areas[name].grid(row=1, column=0, sticky="nsew", padx=PAD, pady=(0, GAP))
+        self.areas[name].grid(row=1, column=0, sticky="nsew", padx=self._side(), pady=(0, GAP))
+        self._tab = name
         self.recompose_later()
+
+    def _side(self, width=None):
+        """Поля по бокам: на широком окне содержимое не шире MAX_W и стоит по центру."""
+        s = scale_of(self)
+        w = width or self.winfo_width()
+        return max(round(PAD * s), (w - round(MAX_W * s)) // 2) if w > 1 else round(PAD * s)
+
+    def _fit_width(self, e):
+        if e.widget is not self or not getattr(self, "_tab", None):
+            return
+        side = self._side(e.width)
+        if side != getattr(self, "_last_side", None):
+            self._last_side = side
+            self.areas[self._tab].grid_configure(padx=side)
 
     def on_accent_drag(self, color, hue):
         self.app.accent = color
@@ -739,8 +763,8 @@ class App(ctk.CTk):
         super().__init__()
         ctk.set_appearance_mode("dark")
         self.title(APP_NAME)
-        self.minsize(900, 640)
         self.configure(fg_color=theme.WINDOW)
+        self.settings = load_settings()
         # без системного заголовка — вкладки и кнопки окна в своей полосе сверху
         self.chrome = Chrome(self)
         self.chrome.on_close = self.on_close
@@ -749,10 +773,12 @@ class App(ctk.CTk):
         self.chrome.on_resize_start = self.freeze.start
         self.chrome.on_resize_frame = self.freeze.frame
         self.chrome.on_resize_end = self.freeze.end
+        # окно открывается таким, каким его оставили (как в лаунчере), но не меньше минимума
         s = ctk.ScalingTracker.get_window_scaling(self)
-        self.chrome.center(round(1000 * s), round(700 * s))
+        w, h = self.settings.get("window") or DEFAULT_SIZE
+        w, h = max(w, MIN_SIZE[0]), max(h, MIN_SIZE[1])
+        self.chrome.center(round(w * s), round(h * s))
 
-        self.settings = load_settings()
         self.accent = self.settings.get("accent", theme.DEFAULT_ACCENT)
         self.engine = TTSEngine()
         self._fonts = {}
@@ -785,8 +811,14 @@ class App(ctk.CTk):
         self.show(MainView(self, self))
 
     def on_close(self):
+        if not self.chrome.maximized:   # запомнить размер обычного окна
+            s = ctk.ScalingTracker.get_window_scaling(self)
+            w, h = self.chrome.size()
+            self.settings["window"] = [round(w / s), round(h / s)]
         if isinstance(self.view, MainView):
-            self.view.close()
+            self.view.close()   # сохраняет настройки, в том числе размер окна
+        else:
+            save_settings(self.settings)
         self.destroy()
 
 
