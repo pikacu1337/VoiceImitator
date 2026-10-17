@@ -5,7 +5,7 @@
     .venv\\Scripts\\python tools\\build_exe.py app        # только VoiceImitator.exe
     .venv\\Scripts\\python tools\\build_exe.py setup      # только VoiceImitatorSetup.exe
 
-VoiceImitator.exe (~180 МБ, внутри PyTorch) — сама программа; голосовая модель (~40 МБ)
+VoiceImitator.exe (внутри PyTorch и Qt) — сама программа; голосовая модель (~40 МБ)
 не вшивается, программа скачает её при первом запуске.
 VoiceImitatorSetup.exe (небольшой) — мастер установки: скачивает последнюю версию
 программы с GitHub, ставит её, создаёт ярлыки и запись в «Приложениях».
@@ -26,17 +26,22 @@ TARGETS = {
         name="VoiceImitator",
         entry=ROOT / "app" / "__main__.py",
         extra=["--collect-data", "num2words", "--collect-submodules", "num2words",
-               "--hidden-import", "app.gui",
+               "--hidden-import", "app.qtui.main",
                # оригинальный пакет VB-CABLE и картинка фона — как app/assets (без изменений)
-               "--add-data", f"{ASSETS}{os.pathsep}app/assets"],
+               "--add-data", f"{ASSETS}{os.pathsep}app/assets",
+               # интерфейс — QML-файлы рядом с программой
+               "--add-data", f"{ROOT / 'app' / 'qtui' / 'qml'}{os.pathsep}app/qtui/qml",
+               # окно — на Qt; Tk нужен только установщику
+               *[x for m in ("tkinter", "customtkinter") for x in ("--exclude-module", m)]],
     ),
     "setup": dict(
         name="VoiceImitatorSetup",
         entry=ROOT / "app" / "setup_main.py",
         # установщику не нужны ни голос, ни звук — без них он в разы меньше
-        extra=["--add-data", f"{ASSETS / 'Images'}{os.pathsep}app/assets/Images",
-               *[x for m in ("torch", "pedalboard", "sounddevice", "num2words", "_sounddevice_data",
-                             "app.gui", "app.tts", "app.audio", "app.cable_install")
+        extra=["--collect-all", "customtkinter",
+               "--add-data", f"{ASSETS / 'Images'}{os.pathsep}app/assets/Images",
+               *[x for m in ("PySide6", "shiboken6", "torch", "pedalboard", "sounddevice", "num2words",
+                             "_sounddevice_data", "app.qtui", "app.tts", "app.audio", "app.cable_install")
                  for x in ("--exclude-module", m)]],
     ),
 }
@@ -54,7 +59,6 @@ def build(target: str) -> None:
         "--name", t["name"],
         "--windowed",
         "--onefile",
-        "--collect-all", "customtkinter",
         *t["extra"],
         str(t["entry"]),
     ]
