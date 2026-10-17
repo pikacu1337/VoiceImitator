@@ -81,8 +81,14 @@ class Clear(tk.Canvas):
     def __init__(self, master, **kw):
         super().__init__(master, bd=0, highlightthickness=0, bg=theme.WINDOW, **kw)
         self._img = None
+        self._sig = None
+        # Подложка — прямоугольник среднего цвета участка: если контейнер вырос раньше, чем
+        # пересобралось стекло, в новой полосе виден близкий тон, а не чёрный. Цвет меняем через
+        # itemconfigure: configure(bg=…) у холста сбросил бы его размер к умолчанию.
+        self._bgrect = self.create_rectangle(0, 0, 10000, 10000, fill=theme.WINDOW, outline="")
         self._item = self.create_image(0, 0, anchor="nw")
         self.tag_lower(self._item)
+        self.tag_lower(self._bgrect)
         self.bind("<Configure>", self._changed, add="+")
 
     def _changed(self, _e=None):
@@ -90,10 +96,18 @@ class Clear(tk.Canvas):
         if view:
             view.recompose_later()
 
-    def show(self, pil):
+    def show(self, pil) -> bool:
+        """Ставит кусок картинки. Если он не изменился — ничего не перерисовывает."""
+        sig = (pil.size, hash(pil.tobytes()))
+        if sig == self._sig:
+            return False
+        self._sig = sig
         self._img = ImageTk.PhotoImage(pil)
         self.itemconfigure(self._item, image=self._img)
+        self.itemconfigure(self._bgrect, fill=_hex(pil.resize((1, 1), Image.BOX).getpixel((0, 0))))
         self.tag_lower(self._item)
+        self.tag_lower(self._bgrect)
+        return True
 
 
 class Text(Clear):
@@ -161,9 +175,11 @@ class Text(Clear):
         self._apply_color()
 
     def show(self, pil):
-        super().show(pil)
+        if not super().show(pil):
+            return False
         self._avg = _hex(pil.resize((1, 1), Image.BOX).getpixel((0, 0)))
         self._apply_color()
+        return True
 
 
 class GlassPanel(Clear):
@@ -206,29 +222,46 @@ class GlassView(tk.Canvas):
     def __init__(self, master, app):
         super().__init__(master, bd=0, highlightthickness=0, bg=theme.WINDOW)
         self.app = app
+        self._bgrect = self.create_rectangle(0, 0, 10000, 10000, fill=theme.WINDOW, outline="")
         self._item = self.create_image(0, 0, anchor="nw")
         self._img = None
         self._key = None
         self._base = None
         self._frost = None
         self._job = None
-        self.bind("<Configure>", lambda _e: self.recompose_later())
+        self._fast = False
+        self._tinted = {}
+        self.bind("<Configure>", lambda _e: self._on_size())
 
-    def recompose_later(self, delay: int = 50):
+    def _on_size(self):
+        chrome = getattr(self.app, "chrome", None)
+        if chrome is not None and chrome.resizing:
+            self.recompose_later(16, fast=True)   # пока тянут край — быстро и грубо
+        else:
+            self.recompose_later()
+
+    def recompose_later(self, delay: int = 50, fast: bool = False):
         if self._job:
             self.after_cancel(self._job)
+            fast = fast and self._fast   # если уже ждём полную пересборку — она главнее
+        self._fast = fast
         self._job = self.after(delay, self.recompose)
 
-    def _layers(self, w, h):
+    def _layers(self, w, h, fast=False):
         s = self.app.settings
         sc = scale_of(self)
-        key = (w, h, s["bg_mode"], s["bg_custom"], s["bg_brightness"], s["bg_blur"], s["glass_blur"])
+        key = (w, h, fast, s["bg_mode"], s["bg_custom"], s["bg_brightness"], s["bg_blur"], s["glass_blur"])
         if self._key != key:
-            base = backdrop.render(w, h, s["bg_mode"], s["bg_custom"], s["bg_brightness"],
-                                   s["bg_blur"], sc)
-            frost = base.filter(ImageFilter.GaussianBlur(s["glass_blur"] / 100 * GLASS_BLUR_MAX * sc))
+            k = 2 if fast else 1    # быстрый режим: считаем в половинном размере и растягиваем
+            rw, rh = max(2, w // k), max(2, h // k)
+            base = backdrop.render(rw, rh, s["bg_mode"], s["bg_custom"], s["bg_brightness"],
+                                   s["bg_blur"], sc / k)
+            frost = base.filter(ImageFilter.GaussianBlur(s["glass_blur"] / 100 * GLASS_BLUR_MAX * sc / k))
             frost = Image.blend(frost, Image.new("RGB", frost.size, (0, 0, 0)), GLASS_DIM)
             frost = Image.blend(frost, Image.new("RGB", frost.size, (255, 255, 255)), VEIL)
+            if k > 1:
+                base = base.resize((w, h), Image.BILINEAR)
+                frost = frost.resize((w, h), Image.BILINEAR)
             self._base, self._frost, self._key = base, frost, key
         return self._base, self._frost
 
@@ -249,13 +282,14 @@ class GlassView(tk.Canvas):
 
     def recompose(self):
         self._job = None
+        fast, self._fast = self._fast, False
         if not self.winfo_exists():
             return
         self.update_idletasks()
         W, H = self.winfo_width(), self.winfo_height()
         if W < 10 or H < 10:
             return
-        base, frost = self._layers(W, H)
+        base, frost = self._layers(W, H, fast)
         img = base.copy()
         ox, oy = self.winfo_rootx(), self.winfo_rooty()
         clears, leaves = [], []
@@ -273,8 +307,14 @@ class GlassView(tk.Canvas):
             img.paste(frost.crop((x0, y0, x1, y1)), (x0, y0), fill)
             img.paste((255, 255, 255), (x0, y0), ring.point(lambda v: v * EDGE_ALPHA // 255))
 
-        self._img = ImageTk.PhotoImage(img)
-        self.itemconfigure(self._item, image=self._img)
+        sig = (img.size, hash(img.tobytes()))
+        if sig != getattr(self, "_sig", None):
+            self._sig = sig
+            self._img = ImageTk.PhotoImage(img)
+            self.itemconfigure(self._item, image=self._img)
+            self.itemconfigure(self._bgrect, fill=_hex(img.resize((1, 1), Image.BOX).getpixel((0, 0))))
+            self.tag_lower(self._item)
+            self.tag_lower(self._bgrect)
 
         def crop(x0, y0, x1, y1):
             return img.crop((max(0, x0), max(0, y0), min(W, x1), min(H, y1)))
@@ -283,12 +323,18 @@ class GlassView(tk.Canvas):
             x0, y0, x1, y1 = self._rect(c, ox, oy)
             if x1 > x0 and y1 > y0:
                 c.show(crop(x0, y0, x1, y1))
+        if fast:
+            # пока тянут край, контролы не перекрашиваем — это медленно; доделает полная пересборка
+            return
         for leaf in leaves:
             x0, y0, x1, y1 = self._rect(leaf, ox, oy)
             if x1 <= x0 or y1 <= y0:
                 continue
             piece = crop(x0, y0, x1, y1)
-            tint(leaf, _hex(piece.resize((1, 1), Image.BOX).getpixel((0, 0))))
+            avg = _hex(piece.resize((1, 1), Image.BOX).getpixel((0, 0)))
+            if self._tinted.get(id(leaf)) != avg:
+                self._tinted[id(leaf)] = avg
+                tint(leaf, avg)
             cv = getattr(leaf, "_canvas", None)
             if cv is not None and cv.winfo_ismapped():
                 underlay(cv, crop(*self._rect(cv, ox, oy)))
@@ -300,6 +346,11 @@ class GlassView(tk.Canvas):
 
 def underlay(cv, piece):
     """Кладёт под рисунок контрола его кусок фона — скруглённые углы ложатся на стекло."""
+    sig = (piece.size, hash(piece.tobytes()))
+    if getattr(cv, "_ng_sig", None) == sig and cv.find_withtag("ng_under"):
+        cv.tag_lower("ng_under")
+        return
+    cv._ng_sig = sig
     cv._ng_under = ImageTk.PhotoImage(piece)
     cv.delete("ng_under")
     cv.create_image(0, 0, anchor="nw", image=cv._ng_under, tags="ng_under")

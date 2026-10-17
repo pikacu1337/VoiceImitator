@@ -47,6 +47,9 @@ class Chrome:
         self._normal = None
         self._drag = None
         self._resize = None
+        self._cursor = ""
+        self.resizing = False   # пока тянут край — стекло считается быстрее и грубее
+        self.on_resize_end = lambda: None
         self.on_state = lambda maximized: None
         self.on_close = root.destroy
         root.overrideredirect(True)
@@ -136,8 +139,13 @@ class Chrome:
     def _hover(self, widget, e):
         if self._resize or self._drag:
             return
-        side = self._edge(e)
-        widget.configure(cursor=CURSORS.get(side, ""))
+        cursor = CURSORS.get(self._edge(e), "")
+        # Курсор ставим на само окно — элементы без своего курсора его наследуют.
+        # Нельзя делать configure(cursor=...) у холстов-контейнеров: Tk при этом сбрасывает
+        # их размер к умолчанию (378×265), и полоса вкладок на миг раздувается чёрным.
+        if cursor != self._cursor:
+            self._cursor = cursor
+            tk.Tk.configure(self.root, cursor=cursor)
 
     def _in_drag_zone(self, e, drag_height):
         if drag_height is None:
@@ -149,6 +157,7 @@ class Chrome:
         if side:
             self._resize = (side, e.x_root, e.y_root, self.root.winfo_rootx(), self.root.winfo_rooty(),
                             self.root.winfo_width(), self.root.winfo_height())
+            self.resizing = True
         elif drag and self._in_drag_zone(e, drag_height):
             if self.maximized:  # тянем развёрнутое окно — сначала вернуть обычный размер под курсор
                 nw = int(self._normal.split("x")[0])
@@ -180,6 +189,9 @@ class Chrome:
     def _release(self, _e):
         self._drag = None
         self._resize = None
+        if self.resizing:
+            self.resizing = False
+            self.on_resize_end()   # после растягивания — стекло в полном качестве
 
     def _dbl(self, e, drag_height):
         if not self._edge(e) and self._in_drag_zone(e, drag_height):

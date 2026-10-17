@@ -7,8 +7,9 @@ from app import theme
 from app.glass import Clear, scale_of
 
 TRACK = 4          # толщина дорожки
-THUMB = (6, 18)    # метка: ширина × высота
-THUMB_HOVER = (6, 20)
+THUMB = (10, 13)   # метка: ширина × высота
+THUMB_HOVER = (10, 15)
+THUMB_R = 3        # скругление метки
 HEIGHT = 24
 SS = 3             # рисуем в 3x и уменьшаем — так края гладкие
 
@@ -117,7 +118,7 @@ class Slider(Clear):
         tw, th = (THUMB_HOVER if self.hover else THUMB)
         tw, th = tw * s, th * s
         d.rounded_rectangle(((xv - tw / 2) * ss, (cy - th / 2) * ss, (xv + tw / 2) * ss, (cy + th / 2) * ss),
-                            radius=tw / 2 * ss, fill=_rgba(self.accent, alpha))
+                            radius=THUMB_R * s * ss, fill=_rgba(self.accent, alpha))
         self._ref = ImageTk.PhotoImage(img.resize((w, h), Image.LANCZOS))
         self.itemconfigure(self._top, image=self._ref)
         self.tag_raise(self._top)
