@@ -38,6 +38,9 @@ Window {
     property string monitor: ""
     property string mic: ""
     property var cableInfo: ({ text: "", install: false, button: "Установить кабель", enabled: true })
+    property string voiceText: ""        // голосовой ввод: что происходит
+    property real voiceProgress: -1      // доля загрузки; -1 — без шкалы, -2 — ошибка
+    property string sttMode: s.stt_mode
 
     function set(key, value) { backend.set(key, value) }
 
@@ -65,6 +68,11 @@ Window {
             win.cable = d.cable; win.monitor = d.monitor; win.mic = d.mic
         }
         function onCable(c) { win.cableInfo = c }
+        function onChanged(key, value) {
+            if (key === "mic_on") micSwitch.checked = value
+        }
+        function onVoiceStatus(text, progress) { win.voiceText = text; win.voiceProgress = progress }
+        function onHeard(text) { win.voiceText = "«" + text + "»" }
     }
 
     // ---------- фон ----------
@@ -188,6 +196,26 @@ Window {
                     }
                     GhostButton { implicitWidth: 96; implicitHeight: 42; text: "Стоп"; onClicked: backend.stop() }
                 }
+                RowLayout {   // голосовой ввод: говорите — программа распознает и озвучит
+                    Layout.fillWidth: true
+                    Layout.topMargin: 12
+                    spacing: 14
+                    SwitchRow {
+                        id: voiceSwitch
+                        text: "Голосовой ввод"
+                        checked: win.s.stt_on
+                        onToggled: (on) => win.set("stt_on", on)
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        text: !voiceSwitch.checked ? "Говорите в микрофон — фраза озвучится выбранным голосом"
+                              : win.voiceText + (win.voiceProgress >= 0 ? "  " + Math.round(win.voiceProgress * 100) + "%" : "")
+                        elide: Text.ElideRight
+                        color: win.voiceProgress === -2 ? "#ff8a80" : voiceSwitch.checked ? Theme.muted : Theme.faint
+                        font.family: Theme.font
+                        font.pixelSize: 12
+                    }
+                }
                 Text {
                     text: "История — нажмите, чтобы повторить"
                     color: Theme.faint
@@ -264,6 +292,63 @@ Window {
                         font.pixelSize: 11
                     }
                 }
+                Section {
+                    title: "Голосовой ввод"
+                    Layout.fillWidth: true
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.bottomMargin: 10
+                        text: "Говорите в микрофон — программа распознает речь и озвучит её выбранным голосом. "
+                              + "Пока голосовой ввод включён, живой микрофон в кабель не пускается"
+                        wrapMode: Text.WordWrap
+                        color: Theme.muted
+                        font.family: Theme.font
+                        font.pixelSize: 12
+                    }
+                    Dropdown {
+                        Layout.fillWidth: true
+                        model: win.ins
+                        displayText: win.s.stt_mic || "Микрофон Windows по умолчанию"
+                        onPicked: (v) => { displayText = v; win.set("stt_mic", v) }
+                    }
+                    Text {
+                        Layout.topMargin: 12
+                        Layout.bottomMargin: 6
+                        text: "Где распознавать"
+                        color: Theme.text
+                        font.family: Theme.font
+                        font.pixelSize: 13
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        spacing: 4
+                        Repeater {
+                            model: [["gpu", "Видеокарта NVIDIA"], ["cpu", "Процессор"]]
+                            delegate: GhostButton {
+                                required property var modelData
+                                Layout.fillWidth: true
+                                Layout.preferredWidth: 1
+                                implicitHeight: 32
+                                text: modelData[1]
+                                selected: win.sttMode === modelData[0]
+                                dim: !selected
+                                onClicked: { win.sttMode = modelData[0]; win.set("stt_mode", modelData[0]) }
+                            }
+                        }
+                    }
+                    Text {
+                        Layout.fillWidth: true
+                        Layout.topMargin: 6
+                        text: win.sttMode === "gpu"
+                              ? (win.info.nvidia ? "Точно и быстро. Один раз скачается ~2,1 ГБ: библиотеки видеокарты и модель"
+                                                 : "Видеокарта NVIDIA не найдена — выберите «Процессор»")
+                              : "Без видеокарты: фраза распознаётся 2–3 с, точность пониже. Один раз скачается ~480 МБ"
+                        wrapMode: Text.WordWrap
+                        color: win.sttMode === "gpu" && !win.info.nvidia ? "#ff8a80" : Theme.faint
+                        font.family: Theme.font
+                        font.pixelSize: 12
+                    }
+                }
             }
             ColumnLayout {
                 Layout.preferredWidth: 1
@@ -294,7 +379,7 @@ Window {
                         font.family: Theme.font
                         font.pixelSize: 12
                     }
-                    SwitchRow { checked: win.s.mic_on; onToggled: (on) => win.set("mic_on", on) }
+                    SwitchRow { id: micSwitch; checked: win.s.mic_on; onToggled: (on) => win.set("mic_on", on) }
                     Dropdown {
                         Layout.fillWidth: true
                         Layout.topMargin: 10
