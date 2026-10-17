@@ -10,8 +10,9 @@ import customtkinter as ctk
 
 from app import audio, cable_install, theme
 from app.chrome_ui import Footer, TabStrip, TitleBar
-from app.freeze import Freeze
 from app.glass import Clear, Dropdown, GlassPanel, GlassView, Text, scale_of
+from app.history import HistoryList
+from app.live import Preview
 from app.paths import DATA_DIR, SETTINGS_PATH
 from app.picker import AccentPicker
 from app.slider import Slider
@@ -186,7 +187,9 @@ class MainView(GlassView):
         self.in_devices = []
         self.accent_widgets = []
 
-        self.grid_columnconfigure(0, weight=1)
+        # Сетка экрана: поле | колонка | колонка | поле. Панели вкладок стоят прямо в ней, без
+        # общего контейнера: тот был размером почти с окно и перерисовывался каждый кадр растягивания.
+        self.grid_columnconfigure((0, 3), weight=0)
         self.grid_rowconfigure(1, weight=1)
 
         self._build_header()
@@ -198,7 +201,7 @@ class MainView(GlassView):
 
         # внизу — только строка версии, сообщения проявляются под ней
         self.footer = Footer(self, app)
-        self.footer.grid(row=2, column=0, sticky="ew", padx=PAD, pady=(0, round(8 * scale_of(self))))
+        self.footer.grid(row=2, column=0, columnspan=4, sticky="ew", padx=PAD, pady=(0, round(8 * scale_of(self))))
 
         self.refresh_devices()
         self.apply_audio_settings()
@@ -214,19 +217,16 @@ class MainView(GlassView):
     def _build_header(self):
         # вместо системного заголовка: вкладки по центру, кнопки окна справа, прямо на фоне
         bar = TitleBar(self, self.app)
-        bar.grid(row=0, column=0, sticky="ew")
+        bar.grid(row=0, column=0, columnspan=4, sticky="ew")
         self.tabs = TabStrip(bar, self.TABS, self.switch_tab, self.app)
         self.tabs.place(relx=0.5, rely=0.5, anchor="center")
 
     def _two_columns(self):
-        area = Clear(self)
-        area.grid_columnconfigure((0, 1), weight=1, uniform="cols")
-        cols = Clear(area), Clear(area)
-        cols[0].grid(row=0, column=0, sticky="new", padx=(0, GAP // 2))
-        cols[1].grid(row=0, column=1, sticky="new", padx=(GAP // 2, 0))
+        """Две колонки панелей поровну. Вкладка — (виджеты колонок, доли ширины)."""
+        cols = Clear(self), Clear(self)
         for c in cols:
             c.grid_columnconfigure(0, weight=1)
-        return area, cols
+        return (cols, (1, 1)), cols
 
     def _section(self, col, row, title):
         p = GlassPanel(col)
@@ -238,14 +238,7 @@ class MainView(GlassView):
     # ---------- вкладка «Озвучка» ----------
 
     def _build_speak_area(self):
-        area = Clear(self)
-        # uniform — ширина делится строго 3:2 и не зависит от содержимого: иначе смена текста
-        # кнопки («Озвучить» → «Озвучиваю…») сдвигала обе панели
-        area.grid_columnconfigure(0, weight=3, uniform="speak")
-        area.grid_columnconfigure(1, weight=2, uniform="speak")
-
-        p = GlassPanel(area)
-        p.grid(row=0, column=0, sticky="new", padx=(0, GAP // 2))
+        p = GlassPanel(self)
         p.grid_columnconfigure(0, weight=1)
         self.k.label(p, "Текст", theme.F_PANEL).grid(row=0, column=0, sticky="w", padx=20, pady=(18, 8))
         self.text = ctk.CTkTextbox(p, height=120, wrap="word", text_color=theme.TEXT,
@@ -264,15 +257,11 @@ class MainView(GlassView):
 
         self.k.label(p, "История — нажмите, чтобы повторить", theme.F_CAPTION, theme.FAINT)\
             .grid(row=3, column=0, sticky="w", padx=20, pady=(0, 6))
-        self.history_box = ctk.CTkScrollableFrame(p, height=120, corner_radius=theme.R_ROW,
-                                                  scrollbar_button_color=theme.EDGE)
-        self.history_box._parent_frame.ng_kind = "scroll"
-        self.history_box._parent_frame.ng_scroll = self.history_box
+        self.history_box = HistoryList(p, lambda t: self.speak(t, from_history=True))
         self.history_box.grid(row=4, column=0, sticky="ew", padx=20, pady=(0, 20))
         self.render_history()
 
-        v = GlassPanel(area)
-        v.grid(row=0, column=1, sticky="new", padx=(GAP // 2, 0))
+        v = GlassPanel(self)
         v.grid_columnconfigure(0, weight=1)
         self.k.label(v, "Голос", theme.F_PANEL).grid(row=0, column=0, sticky="w", padx=20, pady=(18, 8))
         self.preset = self.k.menu(v, list(PRESETS.keys()), self.apply_preset)
@@ -286,7 +275,9 @@ class MainView(GlassView):
         self.vol_lbl, self.vol = self._slider(v, 7, "Громкость", 0.0, 1.0, self.s["volume"], "%",
                                               pct=True, cmd=self.on_volume)
         Clear(v, height=14).grid(row=9, column=0)
-        return area
+        # ширина делится строго 3:2 и не зависит от содержимого: иначе смена текста
+        # кнопки («Озвучить» → «Озвучиваю…») сдвигала обе панели
+        return (p, v), (3, 2)
 
     # ---------- вкладка «Настройки»: звук ----------
 
@@ -407,10 +398,19 @@ class MainView(GlassView):
     # ---------- вкладки / акцент ----------
 
     def switch_tab(self, name):
-        for area in self.areas.values():
-            area.grid_remove()
-        self.areas[name].grid(row=1, column=0, sticky="nsew", padx=self._side(), pady=(0, GAP))
+        for widgets, _ in self.areas.values():
+            for w in widgets:
+                w.grid_remove()
+        widgets, weights = self.areas[name]
+        for col, weight in enumerate(weights, start=1):
+            # uniform — колонки делят ширину строго по долям, сколько бы ни просило содержимое
+            self.grid_columnconfigure(col, weight=weight, uniform="tab")
+        for col, w in enumerate(widgets, start=1):
+            w.grid(row=1, column=col, sticky="new", pady=(0, GAP),
+                   padx=(0, GAP // 2) if col == 1 else (GAP // 2, 0))
         self._tab = name
+        self._last_side = None
+        self._fit_width()
         self.recompose_later()
 
     def _side(self, width=None):
@@ -419,13 +419,20 @@ class MainView(GlassView):
         w = width or self.winfo_width()
         return max(round(PAD * s), (w - round(MAX_W * s)) // 2) if w > 1 else round(PAD * s)
 
-    def _fit_width(self, e):
-        if e.widget is not self or not getattr(self, "_tab", None):
+    def predict_columns(self, width):
+        """Ширины колонок сетки при ширине экрана width — для превью растягивания (app/live.py)."""
+        side = self._side(width)
+        _, weights = self.areas[self._tab]
+        rest = width - 2 * side
+        return [side] + [rest * w / sum(weights) for w in weights] + [side]
+
+    def _fit_width(self, e=None):
+        if e is not None and e.widget is not self or not getattr(self, "_tab", None):
             return
-        side = self._side(e.width)
+        side = self._side(e.width if e is not None else None)
         if side != getattr(self, "_last_side", None):
             self._last_side = side
-            self.areas[self._tab].grid_configure(padx=side)
+            self.grid_columnconfigure((0, 3), minsize=side)
 
     def on_accent_drag(self, color, hue):
         self.app.accent = color
@@ -713,24 +720,8 @@ class MainView(GlassView):
         self.save()
 
     def render_history(self):
-        # Строки переиспользуются: меняются только надписи. Раньше список пересоздавался
-        # целиком и на мгновение становился пустым.
-        rows = getattr(self, "_history_rows", [])
-        items = self.s["history"]
-        while len(rows) < len(items):
-            b = ctk.CTkButton(self.history_box, text="", anchor="w", height=28,
-                              corner_radius=theme.R_ROW, fg_color="transparent", hover_color=theme.WASH,
-                              text_color=theme.MUTED, font=self.app.font(theme.F_LIST))
-            b.pack(fill="x", pady=1)
-            rows.append(b)
-        while len(rows) > len(items):
-            rows.pop().destroy()
-        for b, item in zip(rows, items):
-            preview = item if len(item) <= 52 else item[:51] + "…"
-            if b.cget("text") != preview:
-                b.configure(text=preview)
-            b.configure(command=lambda t=item: self.speak(t, from_history=True))
-        self._history_rows = rows
+        # Порядок строк меняет только add_history; повтор из истории его не трогает.
+        self.history_box.set_items(self.s["history"])
 
     # ---------- сохранение ----------
 
@@ -768,11 +759,12 @@ class App(ctk.CTk):
         # без системного заголовка — вкладки и кнопки окна в своей полосе сверху
         self.chrome = Chrome(self)
         self.chrome.on_close = self.on_close
-        # пока тянут край или разворачивают окно — поверх стоп-кадр, перекладка под ним
-        self.freeze = Freeze(self)
-        self.chrome.on_resize_start = self.freeze.start
-        self.chrome.on_resize_frame = self.freeze.frame
-        self.chrome.on_resize_end = self.freeze.end
+        # пока тянут край или разворачивают окно — поверх превью, где панели уже на новых местах;
+        # настоящая перекладка — одна, когда край отпущен
+        self.preview = Preview(self)
+        self.chrome.on_resize_start = self.preview.start
+        self.chrome.on_resize_frame = self.preview.frame
+        self.chrome.on_resize_end = self.preview.end
         # окно открывается таким, каким его оставили (как в лаунчере), но не меньше минимума
         s = ctk.ScalingTracker.get_window_scaling(self)
         w, h = self.settings.get("window") or DEFAULT_SIZE

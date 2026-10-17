@@ -80,6 +80,7 @@ class AccentPicker(Clear):
         # квадрат насыщенности/яркости
         self.sv = _Layer(self, height=round(SV_H * self.s), cursor="hand2")
         self.sv.grid(row=0, column=0, sticky="ew")
+        self.sv.ng_stretch = "scale"   # в превью растягивания (app/live.py) градиент масштабируется
         # полоса оттенков (холст шире полосы на 3px с каждой стороны — под метку 20×5)
         self.hue = _Layer(self, width=round(HUE_MARK[0] * self.s), height=round(SV_H * self.s), cursor="hand2")
         self.hue.grid(row=0, column=1, padx=(round(9), round(17)))

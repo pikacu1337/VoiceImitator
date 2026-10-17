@@ -190,9 +190,10 @@ class TabStrip(Clear):
     def restyle_accent(self):
         self._render_bar()
 
-    def show(self, pil):
-        super().show(pil)
+    def show(self, pil, avg=None):
+        changed = super().show(pil, avg)
         self.tag_raise(self._bar)
+        return changed
 
 
 class Footer(Clear):
@@ -219,10 +220,12 @@ class Footer(Clear):
         self.itemconfigure(self.msg, fill=blend(self._avg, theme.MUTED, self.msg_alpha),
                            state="normal" if self.msg_alpha > 0.01 else "hidden")
 
-    def show(self, pil):
-        super().show(pil)
-        self._avg = "#%02x%02x%02x" % pil.resize((1, 1), Image.BOX).getpixel((0, 0))[:3]
+    def show(self, pil, avg=None):
+        if not super().show(pil, avg):
+            return False
+        self._avg = avg or "#%02x%02x%02x" % pil.resize((1, 1), Image.BOX).getpixel((0, 0))[:3]
         self._layout()
+        return True
 
     def flash(self, text):
         self.itemconfigure(self.msg, text=text)

@@ -34,7 +34,8 @@ class Slider(Clear):
         self.hover = False
         self._ref = None
         self._top = self.create_image(0, 0, anchor="nw")
-        self.bind("<Configure>", lambda _e: self._draw(), add="+")
+        self._size = None
+        self.bind("<Configure>", self._resized, add="+")
         self.bind("<Button-1>", self._drag)
         self.bind("<B1-Motion>", self._drag)
         self.bind("<Enter>", lambda _e: self._set_hover(True))
@@ -92,6 +93,12 @@ class Slider(Clear):
         self._draw()
 
     # ---------- рисование ----------
+
+    def _resized(self, e):
+        # <Configure> приходит и когда ползунок просто сдвинулся вместе с панелью — тогда рисунок прежний
+        if (e.width, e.height) != self._size:
+            self._size = (e.width, e.height)
+            self._draw()
 
     def _draw(self):
         w, h = self.winfo_width(), self.winfo_height()

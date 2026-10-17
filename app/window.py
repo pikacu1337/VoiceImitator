@@ -9,8 +9,9 @@
 Верхний край такой рамки Windows рисует цветом заголовка — красим его в цвет верха
 фона (set_top_color), и он сливается с окном.
 
-Пока край тянут мышью, поверх интерфейса стоит стоп-кадр (app/freeze.py): Tk
-перекладывает интерфейс медленнее, чем двигается мышь.
+Пока край тянут мышью, поверх интерфейса стоит превью (app/live.py): Tk
+перекладывает интерфейс медленнее, чем двигается мышь, поэтому панели на новых
+местах рисует модель сетки, а настоящая перекладка — одна, когда край отпущен.
 
 Как в лаунчере: окно не меньше MIN_SIZE, открывается таким, каким его оставили,
 в развёрнутом виде не вылезает за экран (это делает сама рамка).
@@ -70,7 +71,7 @@ class Chrome:
         self.root = root
         self.min_size = min_size
         self.resizable = True     # у мастера установки окно фиксированного размера
-        self.resizing = False     # пока тянут край, поверх окна стоп-кадр
+        self.resizing = False     # пока тянут край, поверх окна превью
         self._hwnd = None
         self._zoomed = False
         self._last_size = None
@@ -195,7 +196,7 @@ class Chrome:
     def toggle_maximize(self):
         if not self.resizable:
             return
-        self.on_resize_start()   # стоп-кадр закрывает перекладку интерфейса
+        self.on_resize_start()   # превью закрывает перекладку интерфейса
         user32.ShowWindow(self.hwnd, SW_RESTORE if self.maximized else SW_MAXIMIZE)
         self.root.update_idletasks()
         self.on_resize_frame()
@@ -219,7 +220,7 @@ class Chrome:
         first = self._last_size is None
         self._last_size = size
         # Размер меняется, пока зажата кнопка мыши, — значит тянут край системной рамки:
-        # ставим стоп-кадр (снимок ещё со старой раскладкой — Tk переложит её позже).
+        # ставим превью (снимок ещё со старой раскладкой — Tk её больше не трогает).
         if not first and not self.resizing and user32.GetAsyncKeyState(VK_LBUTTON) & 0x8000:
             self.resizing = True
             self.on_resize_start()
