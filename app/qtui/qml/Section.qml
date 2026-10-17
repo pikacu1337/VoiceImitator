@@ -6,6 +6,7 @@ Glass {
     id: sec
     property string title
     property int bottomPad: 20
+    property bool fill: false           // высота задана снаружи — содержимое растягивается на неё (Layout.fillHeight)
     default property alias content: col.data
     implicitHeight: col.implicitHeight + 18 + bottomPad
 
@@ -14,6 +15,7 @@ Glass {
         x: 20
         y: 18
         width: sec.width - 40
+        height: sec.fill ? sec.height - 18 - sec.bottomPad : implicitHeight
         spacing: 0
         Text {
             text: sec.title

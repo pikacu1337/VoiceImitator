@@ -136,18 +136,20 @@ Window {
         anchors.bottom: footer.top
         anchors.bottomMargin: Theme.gap - 8
 
-        // ===== Озвучка =====
+        // ===== Озвучка: панель «Текст» на пол-окна по центру, голос — кнопкой под ней =====
         Item {
             anchors.fill: parent
             visible: win.tab === 0
-            // ширина делится строго 3:2 и не зависит от содержимого
             Section {
                 id: speakPanel
                 title: "Текст"
-                width: (parent.width - Theme.gap) * 0.6
+                fill: true
+                width: Math.min(parent.width, Math.max(520, win.width / 2))
+                height: parent.height - voiceButton.height - 18
+                anchors.horizontalCenter: parent.horizontalCenter
                 Rectangle {
                     Layout.fillWidth: true
-                    implicitHeight: 120
+                    implicitHeight: 140
                     radius: Theme.rPill
                     color: Theme.fieldFill
                     border.width: 1
@@ -194,54 +196,22 @@ Window {
                     Layout.topMargin: 12
                     Layout.bottomMargin: 6
                 }
-                HistoryList {
+                HistoryList {   // забирает всю оставшуюся высоту панели
+                    Layout.minimumHeight: 96
                     Layout.fillWidth: true
+                    Layout.fillHeight: true
                     items: win.history
                     onPicked: (t) => backend.speak(t, true)
                 }
             }
-            Section {
-                title: "Голос"
-                bottomPad: 14
-                x: speakPanel.width + Theme.gap
-                width: (parent.width - Theme.gap) * 0.4
-                Dropdown {
-                    Layout.fillWidth: true
-                    Layout.topMargin: 4
-                    model: win.info.presets
-                    placeholder: "Пресеты…"
-                    onPicked: (name) => {
-                        var p = backend.preset(name)
-                        voice.currentIndex = voice.find(p.voice)
-                        speed.value = p.speed; pitch.value = p.pitch
-                        win.set("voice", p.voice); win.set("speed", p.speed); win.set("pitch", p.pitch)
-                    }
-                }
-                Dropdown {
-                    id: voice
-                    Layout.fillWidth: true
-                    Layout.topMargin: 8
-                    model: win.info.voices
-                    Component.onCompleted: currentIndex = find(win.s.voice)
-                    onPicked: (v) => win.set("voice", v)
-                }
-                SliderRow {
-                    id: speed
-                    title: "Скорость"; from: 0.5; to: 1.5; value: win.s.speed
-                    format: (v) => v.toFixed(2) + "x"
-                    onMoved: (v) => win.set("speed", Math.round(v * 1000) / 1000)
-                }
-                SliderRow {
-                    id: pitch
-                    title: "Тон"; from: -12; to: 12; value: win.s.pitch
-                    format: (v) => (v >= 0.5 ? "+" : "") + v.toFixed(0) + " пт"
-                    onMoved: (v) => win.set("pitch", Math.round(v * 10) / 10)
-                }
-                SliderRow {
-                    title: "Громкость"; from: 0; to: 1; value: win.s.volume
-                    format: (v) => Math.round(v * 100) + "%"
-                    onMoved: (v) => win.set("volume", Math.round(v * 1000) / 1000)
-                }
+            PillButton {
+                id: voiceButton
+                anchors.top: speakPanel.bottom
+                anchors.topMargin: 18
+                anchors.horizontalCenter: parent.horizontalCenter
+                glyph: "\uE713"
+                text: "Настройки голоса"
+                onClicked: voiceModal.shown = true
             }
         }
 
@@ -449,6 +419,108 @@ Window {
             }
         }
     }
+
+    // ---------- «Настройки голоса»: окно поверх всего, кроме заголовка (как «Информация» в ZapretLauncher).
+    // Клик мимо панели, Esc или смена вкладки закрывают его. ----------
+    Item {
+        id: voiceModal
+        objectName: "voiceModal"
+        property bool shown: false
+        anchors.fill: parent
+        visible: opacity > 0
+        opacity: shown ? 1 : 0
+        Behavior on opacity { NumberAnimation { duration: voiceModal.shown ? 180 : 140 } }
+
+        Rectangle {
+            y: titleBar.height
+            width: parent.width
+            height: parent.height - y
+            color: "#8c000000"
+            MouseArea { anchors.fill: parent; onClicked: voiceModal.shown = false }
+        }
+        // заголовок затенён вместе со всем, чтобы не выделялся рамкой, но остаётся рабочим
+        Rectangle { width: parent.width; height: titleBar.height; color: "#8c000000" }
+
+        RectangularShadow {
+            anchors.fill: voicePanel
+            radius: 16
+            blur: 40
+            color: Qt.rgba(0, 0, 0, 0.75)
+        }
+        Glass {
+            id: voicePanel
+            width: 560
+            height: voiceCol.implicitHeight + 10 + 24
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenterOffset: titleBar.height / 2
+            MouseArea { anchors.fill: parent }   // клик по самой панели её не закрывает
+
+            ColumnLayout {
+                id: voiceCol
+                x: 34
+                y: 10
+                width: parent.width - 68
+                spacing: 0
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.topMargin: 8
+                    text: "Настройки голоса"
+                    color: Theme.text
+                    font.family: Theme.font
+                    font.pixelSize: 14
+                    font.bold: true
+                }
+                Text {
+                    Layout.alignment: Qt.AlignHCenter
+                    Layout.topMargin: 2
+                    Layout.bottomMargin: 14
+                    text: "Голос, скорость, тон и громкость"
+                    color: Theme.muted
+                    font.family: Theme.font
+                    font.pixelSize: 12
+                }
+                Dropdown {
+                    Layout.fillWidth: true
+                    model: win.info.presets
+                    placeholder: "Пресеты…"
+                    onPicked: (name) => {
+                        var p = backend.preset(name)
+                        voice.currentIndex = voice.find(p.voice)
+                        speed.value = p.speed; pitch.value = p.pitch
+                        win.set("voice", p.voice); win.set("speed", p.speed); win.set("pitch", p.pitch)
+                    }
+                }
+                Dropdown {
+                    id: voice
+                    Layout.fillWidth: true
+                    Layout.topMargin: 8
+                    model: win.info.voices
+                    Component.onCompleted: currentIndex = find(win.s.voice)
+                    onPicked: (v) => win.set("voice", v)
+                }
+                SliderRow {
+                    id: speed
+                    title: "Скорость"; from: 0.5; to: 1.5; value: win.s.speed
+                    format: (v) => v.toFixed(2) + "x"
+                    onMoved: (v) => win.set("speed", Math.round(v * 1000) / 1000)
+                }
+                SliderRow {
+                    id: pitch
+                    title: "Тон"; from: -12; to: 12; value: win.s.pitch
+                    format: (v) => (v >= 0.5 ? "+" : "") + v.toFixed(0) + " пт"
+                    onMoved: (v) => win.set("pitch", Math.round(v * 10) / 10)
+                }
+                SliderRow {
+                    title: "Громкость"; from: 0; to: 1; value: win.s.volume
+                    format: (v) => Math.round(v * 100) + "%"
+                    onMoved: (v) => win.set("volume", Math.round(v * 1000) / 1000)
+                }
+            }
+        }
+    }
+    Shortcut { sequence: "Esc"; enabled: voiceModal.shown; onActivated: voiceModal.shown = false }
+    onTabChanged: voiceModal.shown = false
 
     // ---------- экран загрузки ----------
     Glass {

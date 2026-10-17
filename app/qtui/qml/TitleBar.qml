@@ -65,8 +65,11 @@ Item {
         color: Theme.accent
         opacity: 0
         property Item target: rep.count > bar.current ? rep.itemAt(bar.current) : null
-        x: target ? tabRow.x + target.x + (target.width - width) / 2 : 0
-        Behavior on x { enabled: underline.opacity > 0; NumberAnimation { duration: 360; easing.type: Easing.InOutCubic } }
+        // место под вкладкой считается внутри полосы вкладок: анимируется только смена вкладки,
+        // а когда окно тянут и полоса едет, чёрточка едет вместе с ней без задержки
+        property real offset: target ? target.x + (target.width - width) / 2 : 0
+        Behavior on offset { enabled: underline.opacity > 0; NumberAnimation { duration: 360; easing.type: Easing.InOutCubic } }
+        x: tabRow.x + offset
         Component.onCompleted: fadeIn.start()
         NumberAnimation on opacity { id: fadeIn; running: false; to: 1; duration: 350; easing.type: Easing.OutCubic }
     }
