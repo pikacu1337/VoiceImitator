@@ -1,5 +1,6 @@
 # Автоматический релиз: на каждый пуш в main берём версию из app/__init__.py.
-# Если релиза vX.Y.Z ещё нет — собираем VoiceImitator.exe на Windows и публикуем его.
+# Если релиза vX.Y.Z ещё нет — собираем на Windows установщик VoiceImitatorSetup.exe
+# и саму программу VoiceImitator.exe и публикуем оба (установщик качает программу отсюда).
 name: Release
 
 on:
@@ -56,7 +57,7 @@ jobs:
         if: steps.v.outputs.exists == 'false'
         shell: bash
         run: |
-          gh release create "v${{ steps.v.outputs.version }}" VoiceImitator.exe \
+          gh release create "v${{ steps.v.outputs.version }}" VoiceImitatorSetup.exe VoiceImitator.exe \
             --title "VoiceImitator ${{ steps.v.outputs.version }}" \
             --target "${{ github.sha }}" \
             --generate-notes

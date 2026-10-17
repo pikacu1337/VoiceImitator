@@ -94,7 +94,7 @@ class Clear(tk.Canvas):
     def _changed(self, _e=None):
         view = find_view(self.master)
         if view:
-            view.recompose_later()
+            view._on_size()
 
     def show(self, pil) -> bool:
         """Ставит кусок картинки. Если он не изменился — ничего не перерисовывает."""
@@ -234,11 +234,10 @@ class GlassView(tk.Canvas):
         self.bind("<Configure>", lambda _e: self._on_size())
 
     def _on_size(self):
-        chrome = getattr(self.app, "chrome", None)
-        if chrome is not None and chrome.resizing:
-            self.recompose_later(16, fast=True)   # пока тянут край — быстро и грубо
-        else:
-            self.recompose_later()
+        freeze = getattr(self.app, "freeze", None)
+        if freeze is not None and freeze.active:
+            return   # окно закрыто стоп-кадром — соберём начисто, когда край отпустят
+        self.recompose_later()
 
     def recompose_later(self, delay: int = 50, fast: bool = False):
         if self._job:
