@@ -1,12 +1,14 @@
-"""Синтез речи: Silero TTS (локально, без интернета) + скорость и тон через pedalboard."""
+"""Синтез речи локально, без интернета: Silero TTS и Piper, скорость и тон — через pedalboard.
+
+Голоса Piper — отдельные модели (~60 МБ каждая), скачиваются при первом выборе голоса."""
 
 import re
 import threading
-import urllib.request
 from typing import Callable
 
 import numpy as np
 
+from app.net import download
 from app.paths import MODELS_DIR
 
 MODEL_URL = "https://models.silero.ai/models/tts/ru/v4_ru.pt"
@@ -14,13 +16,20 @@ MODEL_PATH = MODELS_DIR / "v4_ru.pt"
 SAMPLE_RATE = 48000
 MAX_CHUNK = 800  # Silero не любит слишком длинные куски текста
 
+# голос: (движок, имя голоса у движка)
 VOICES = {
-    "Айдар (мужской)": "aidar",
-    "Евгений (мужской)": "eugene",
-    "Бая (женский)": "baya",
-    "Ксения (женский)": "kseniya",
-    "Ксения 2 (женский)": "xenia",
+    "Айдар (мужской)": ("silero", "aidar"),
+    "Евгений (мужской)": ("silero", "eugene"),
+    "Денис (мужской)": ("piper", "denis"),
+    "Дмитрий (мужской)": ("piper", "dmitri"),
+    "Руслан (мужской)": ("piper", "ruslan"),
+    "Бая (женский)": ("silero", "baya"),
+    "Ксения (женский)": ("silero", "kseniya"),
+    "Ксения 2 (женский)": ("silero", "xenia"),
+    "Ирина (женский)": ("piper", "irina"),
 }
+PIPER_DIR = MODELS_DIR / "piper"
+PIPER_URL = "https://huggingface.co/rhasspy/piper-voices/resolve/main/ru/ru_RU/{0}/medium/ru_RU-{0}-medium.{1}"
 
 # Пресеты: голос, скорость, тон в полутонах
 PRESETS = {
@@ -29,6 +38,9 @@ PRESETS = {
     "Дорама (она)": ("Ксения (женский)", 1.05, 1),
     "Бурундук": ("Бая (женский)", 1.25, 7),
     "Великан": ("Айдар (мужской)", 0.85, -7),
+    "Робот": ("Дмитрий (мужской)", 1.0, -4),
+    "Злодей": ("Руслан (мужской)", 0.9, -5),
+    "Аниме": ("Ирина (женский)", 1.1, 5),
 }
 
 LATIN = {
@@ -85,21 +97,26 @@ def split_text(text: str) -> list[str]:
 
 
 def download_model(progress: Callable[[float], None]) -> None:
-    tmp = MODEL_PATH.with_suffix(".part")
-    with urllib.request.urlopen(MODEL_URL, timeout=30) as r, open(tmp, "wb") as f:
-        total = int(r.headers.get("Content-Length") or 0)
-        done = 0
-        while chunk := r.read(1 << 16):
-            f.write(chunk)
-            done += len(chunk)
-            if total:
-                progress(done / total)
-    tmp.replace(MODEL_PATH)
+    download(MODEL_URL, MODEL_PATH, progress)
+
+
+def piper_path(name: str):
+    return PIPER_DIR / f"ru_RU-{name}-medium.onnx"
+
+
+def piper_present(name: str) -> bool:
+    return piper_path(name).exists() and piper_path(name).with_suffix(".onnx.json").exists()
+
+
+def download_piper(name: str, progress: Callable[[float], None] = lambda _f: None) -> None:
+    download(PIPER_URL.format(name, "onnx.json"), piper_path(name).with_suffix(".onnx.json"))
+    download(PIPER_URL.format(name, "onnx"), piper_path(name), progress)
 
 
 class TTSEngine:
     def __init__(self):
         self.model = None
+        self._piper = {}
         self._lock = threading.Lock()
 
     @property
@@ -111,18 +128,35 @@ class TTSEngine:
 
         torch.set_num_threads(max(1, min(4, (__import__("os").cpu_count() or 2) // 2)))
         self.model = torch.package.PackageImporter(str(MODEL_PATH)).load_pickle("tts_models", "model")
-        self.synthesize("Привет", "aidar", 1.0, 0)  # прогрев, чтобы первая фраза не тормозила
+        self.synthesize("Привет", "Айдар (мужской)", 1.0, 0)  # прогрев, чтобы первая фраза не тормозила
 
-    def synthesize(self, text: str, speaker: str, speed: float, pitch: float) -> np.ndarray:
-        """Возвращает моно float32 с частотой SAMPLE_RATE."""
+    def _piper_voice(self, name: str):
+        if name not in self._piper:
+            from piper import PiperVoice
+
+            self._piper[name] = PiperVoice.load(str(piper_path(name)))
+        return self._piper[name]
+
+    def synthesize(self, text: str, voice: str, speed: float, pitch: float) -> np.ndarray:
+        """voice — название из VOICES. Возвращает моно float32 с частотой SAMPLE_RATE."""
         from pedalboard import time_stretch
 
+        from app.audio import resample
+
+        engine, name = VOICES.get(voice, VOICES["Айдар (мужской)"])
         parts = []
         with self._lock:
             for chunk in split_text(normalize_text(text)):
-                audio = self.model.apply_tts(text=chunk, speaker=speaker, sample_rate=SAMPLE_RATE,
-                                             put_accent=True, put_yo=True)
-                parts.append(audio.numpy().astype(np.float32))
+                if engine == "piper":
+                    pieces = list(self._piper_voice(name).synthesize(chunk))
+                    if not pieces:
+                        continue
+                    audio = resample(np.concatenate([c.audio_float_array for c in pieces]).astype(np.float32),
+                                     pieces[0].sample_rate, SAMPLE_RATE)
+                else:
+                    audio = self.model.apply_tts(text=chunk, speaker=name, sample_rate=SAMPLE_RATE,
+                                                 put_accent=True, put_yo=True).numpy()
+                parts.append(audio.astype(np.float32))
                 parts.append(np.zeros(int(SAMPLE_RATE * 0.15), dtype=np.float32))
         if not parts:
             return np.zeros(0, dtype=np.float32)

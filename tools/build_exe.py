@@ -31,6 +31,8 @@ TARGETS = {
                "--add-data", f"{ASSETS}{os.pathsep}app/assets",
                # интерфейс — QML-файлы рядом с программой
                "--add-data", f"{ROOT / 'app' / 'qtui' / 'qml'}{os.pathsep}app/qtui/qml",
+               # голосовой ввод (faster-whisper: CTranslate2 и VAD) и голоса Piper (espeak-ng с данными)
+               "--collect-all", "faster_whisper", "--collect-all", "ctranslate2", "--collect-all", "piper",
                # окно — на Qt; Tk нужен только установщику
                *[x for m in ("tkinter", "customtkinter") for x in ("--exclude-module", m)]],
     ),
@@ -41,7 +43,8 @@ TARGETS = {
         extra=["--collect-all", "customtkinter",
                "--add-data", f"{ASSETS / 'Images'}{os.pathsep}app/assets/Images",
                *[x for m in ("PySide6", "shiboken6", "torch", "pedalboard", "sounddevice", "num2words",
-                             "_sounddevice_data", "app.qtui", "app.tts", "app.audio", "app.cable_install")
+                             "_sounddevice_data", "faster_whisper", "ctranslate2", "piper", "onnxruntime", "av",
+                             "app.qtui", "app.tts", "app.stt", "app.audio", "app.cable_install")
                  for x in ("--exclude-module", m)]],
     ),
 }

@@ -5,5 +5,7 @@ sounddevice
 pedalboard
 num2words
 pillow
+faster-whisper            # голосовой ввод
+piper-tts                 # голоса Денис, Дмитрий, Руслан, Ирина
 # torch ставится отдельно, CPU-сборка:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu

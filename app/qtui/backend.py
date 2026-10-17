@@ -13,10 +13,10 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QTimer, QUrl, Signal, Slot
 from PySide6.QtWidgets import QFileDialog
 
-from app import __version__, audio, backdrop, cable_install, theme
+from app import __version__, audio, backdrop, cable_install, stt, theme
 from app.paths import DATA_DIR
 from app.settings import DEFAULT_SETTINGS, HISTORY_SIZE, load_settings, save_settings
-from app.tts import PRESETS, VOICES, TTSEngine, download_model
+from app.tts import PRESETS, VOICES, TTSEngine, download_model, download_piper, piper_present
 
 NOT_CHOSEN = "Не выбрано"
 SKY_PATH = DATA_DIR / "sky.png"
@@ -31,6 +31,9 @@ class Backend(QObject):
     cable = Signal("QVariant")          # подсказка про кабель и кнопка установки
     history = Signal("QVariant")
     background = Signal(str)            # адрес картинки фона
+    changed = Signal(str, "QVariant")   # настройку поменял не пользователь, а программа
+    voiceStatus = Signal(str, float)    # голосовой ввод: что происходит и доля (-1 — без шкалы, -2 — ошибка)
+    heard = Signal(str)                 # голосовой ввод: распознанная фраза
     _later = Signal(object)             # выполнить функцию в потоке окна (из любого потока)
 
     def __init__(self):
@@ -44,6 +47,9 @@ class Backend(QObject):
         self.audio_ok = True
         self._save_timer = QTimer(self, singleShot=True, interval=400, timeout=self._save_now)
         self._later.connect(self._run)   # слот объекта — значит, в его потоке, а не в потоке сигнала
+        self.voice = stt.VoiceInput(on_text=self._heard, on_status=self.voiceStatus.emit)
+        if not self.s["stt_mode"]:
+            self.s["stt_mode"] = stt.default_mode()
         threading.Thread(target=self._worker, daemon=True).start()
 
     @Slot(object)
@@ -64,6 +70,7 @@ class Backend(QObject):
             "presets": list(PRESETS),
             "accents": [theme.ACCENTS[k] for k in theme.ACCENT_ORDER],
             "credit": cable_install.CREDIT,
+            "nvidia": stt.has_nvidia(),
         }
 
     # ---------- настройки ----------
@@ -87,6 +94,16 @@ class Backend(QObject):
             self.router.mic_volume = self.s["mic_volume"]
         elif key in ("bg_mode", "bg_custom"):
             self.background.emit(self.background_url())
+        elif key == "stt_on":
+            if value and self.s["mic_on"]:
+                # голосовой ввод заменяет живой голос: друзья слышат только озвучку
+                self.s["mic_on"] = False
+                self.router.set_mic(None)
+                self.changed.emit("mic_on", False)
+                self.flash.emit("Пропуск микрофона в кабель выключен — друзья слышат только озвучку")
+            self._voice_apply()
+        elif key in ("stt_mic", "stt_mode"):
+            self._voice_apply()
         self._save_timer.start()   # ползунки шлют значения часто — пишем на диск с паузой
 
     def _save_now(self):
@@ -159,6 +176,24 @@ class Backend(QObject):
             self.loading.emit(f"Ошибка загрузки модели: {e}", -1)
             return
         self.ready.emit()
+        self._later.emit(self._voice_apply)
+
+    # ---------- голосовой ввод ----------
+
+    def _voice_apply(self):
+        if not self.s["stt_on"]:
+            self.voice.stop()
+            self.voiceStatus.emit("", -1)
+            return
+        if self.engine.model is None:
+            return   # включится, когда загрузится голос
+        dev = self._dev(self.in_devices, self.s["stt_mic"]) or audio.default_device("input", self.in_devices)
+        self.voice.start(dev.index if dev else None, self.s["stt_mode"])
+
+    def _heard(self, text):
+        """Из потока распознавания: фраза — в историю и на озвучку, как набранная."""
+        self.heard.emit(text)
+        self._later.emit(lambda: self.speak(text, False))
 
     # ---------- устройства ----------
 
@@ -290,16 +325,30 @@ class Backend(QObject):
         while True:
             text = self.jobs.get()
             self.busy.emit(True)
+            # озвучка звучит в наушниках — микрофон может её услышать: пока она идёт, не слушаем
+            listen_pause = self.s["monitor_on"]
+            self.voice.paused = listen_pause
             try:
-                data = self.engine.synthesize(text, VOICES[self.s["voice"]], float(self.s["speed"]),
-                                              float(self.s["pitch"]))
+                voice = self.s["voice"]
+                engine, name = VOICES.get(voice, ("silero", ""))
+                if engine == "piper" and not piper_present(name):
+                    self.flash.emit(f"Скачиваю голос «{voice.split(' (')[0]}» (~60 МБ), это один раз…")
+                    download_piper(name)
+                data = self.engine.synthesize(text, voice, float(self.s["speed"]), float(self.s["pitch"]))
                 self.router.play(data)
+                if listen_pause:
+                    deadline = time.monotonic() + len(data) / 48000 + 2
+                    while self.router.playing and time.monotonic() < deadline:
+                        time.sleep(0.05)
+                    time.sleep(0.25)   # хвост эха
             except Exception as e:
                 self.flash.emit(f"Ошибка: {e}")
             finally:
+                self.voice.paused = False
                 self.busy.emit(False)
 
     @Slot()
     def close(self):
         self._save_now()
+        self.voice.stop()
         self.router.close()
