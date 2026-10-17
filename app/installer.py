@@ -159,12 +159,24 @@ def shortcut(link: Path, target: Path) -> None:
                    check=True, creationflags=NO_WINDOW, capture_output=True, timeout=30)
 
 
+def _shell_folder(csidl: int, fallback: Path) -> Path:
+    """Папку спрашиваем у Windows: рабочий стол бывает перенесён (например, в OneDrive),
+    и тогда %USERPROFILE%\\Desktop — не тот рабочий стол, что видит пользователь."""
+    import ctypes
+
+    buf = ctypes.create_unicode_buffer(260)
+    if ctypes.windll.shell32.SHGetFolderPathW(None, csidl, None, 0, buf) == 0 and buf.value:
+        return Path(buf.value)
+    return fallback
+
+
 def start_menu_link() -> Path:
-    return Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs" / f"{TITLE}.lnk"
+    programs = _shell_folder(0x02, Path(os.environ["APPDATA"]) / "Microsoft" / "Windows" / "Start Menu" / "Programs")
+    return programs / f"{TITLE}.lnk"
 
 
 def desktop_link() -> Path:
-    return Path(os.environ["USERPROFILE"]) / "Desktop" / f"{TITLE}.lnk"
+    return _shell_folder(0x10, Path(os.environ["USERPROFILE"]) / "Desktop") / f"{TITLE}.lnk"
 
 
 def stop_running() -> None:
