@@ -1,4 +1,3 @@
-from app.gui import run
+from app.qtui.main import run
 
-if __name__ == "__main__":
-    run()
+run()

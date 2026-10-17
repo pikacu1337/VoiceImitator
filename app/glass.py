@@ -259,7 +259,6 @@ class GlassView(tk.Canvas):
         self._job = None
         self._tinted = {}
         self._sig = None
-        self.comp = None        # последняя полная сборка — из неё превью растягивания (app/live.py)
         self._busy = False      # идёт сборка: её update_idletasks не должен запускать вложенную
         self.bind("<Configure>", lambda _e: self._on_size())
 
@@ -359,7 +358,6 @@ class GlassView(tk.Canvas):
                 return theme.WINDOW
             return _hex(small.crop((sx0, sy0, sx1, sy1)).resize((1, 1), Image.BOX).getpixel((0, 0)))
 
-        self.comp = img
         sig = (img.size, hash(img.tobytes()))
         if sig != self._sig:
             self._sig = sig
